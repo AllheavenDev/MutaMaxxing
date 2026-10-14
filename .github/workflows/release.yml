@@ -10,18 +10,74 @@ permissions:
 
 jobs:
   release:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
 
+      - name: Download Dalamud dev files
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri 'https://goatcorp.github.io/dalamud-distrib/latest.zip' -OutFile '.\latest.zip'
+          $devDirectory = Join-Path $env:APPDATA 'XIVLauncher\addon\Hooks\dev'
+          New-Item -ItemType Directory -Force -Path $devDirectory | Out-Null
+          Expand-Archive -Force '.\latest.zip' $devDirectory
+
       - name: Build plugin
         run: dotnet build .\MutaMaxxing.csproj --configuration Release -p:NuGetAudit=false
+
+      - name: Validate version and generate feed
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v(?<version>\d+\.\d+\.\d+)$') {
+              throw "Release tags must use the vX.Y.Z format; received '$tag'."
+          }
+
+          $releaseVersion = $Matches.version
+          $expectedAssemblyVersion = "$releaseVersion.0"
+          [xml]$project = Get-Content -LiteralPath '.\MutaMaxxing.csproj' -Raw
+          $projectVersion = $project.SelectSingleNode('/Project/PropertyGroup/Version').InnerText
+          if ($projectVersion -ne $releaseVersion) {
+              throw "Tag version $releaseVersion does not match project version $projectVersion."
+          }
+
+          $buildManifest = Get-Content -LiteralPath '.\bin\Release\MutaMaxxing.json' -Raw | ConvertFrom-Json
+          if ($buildManifest.AssemblyVersion -ne $expectedAssemblyVersion) {
+              throw "Build manifest version $($buildManifest.AssemblyVersion) does not match $expectedAssemblyVersion."
+          }
+
+          $feed = @(Get-Content -LiteralPath '.\pluginmaster.json' -Raw | ConvertFrom-Json)
+          if ($feed.Count -ne 1 -or $feed[0].InternalName -ne 'MutaMaxxing') {
+              throw 'pluginmaster.json must contain exactly one MutaMaxxing entry.'
+          }
+
+          $buildApiLevel = [int]$buildManifest.DalamudApiLevel
+          $feedApiLevel = [int]$feed[0].DalamudApiLevel
+          if ($feedApiLevel -ne $buildApiLevel) {
+              throw "Feed API level $feedApiLevel does not match build API level $buildApiLevel."
+          }
+
+          $sdkReference = $project.DocumentElement.GetAttribute('Sdk')
+          if ($sdkReference -notmatch '^Dalamud\.NET\.Sdk/(?<api>\d+)\.\d+\.\d+$') {
+              throw "Unable to read the Dalamud API level from SDK reference '$sdkReference'."
+          }
+          if ([int]$Matches.api -ne $buildApiLevel) {
+              throw "SDK API level $($Matches.api) does not match build API level $buildApiLevel."
+          }
+
+          $taggedZip = "https://github.com/AllheavenDev/MutaMaxxing/releases/download/$tag/MutaMaxxing.zip"
+          $feed[0].AssemblyVersion = $expectedAssemblyVersion
+          $feed[0].DalamudApiLevel = $buildApiLevel
+          $feed[0].LastUpdate = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
+          $feed[0].DownloadLinkInstall = $taggedZip
+          $feed[0].DownloadLinkUpdate = $taggedZip
+          $feed | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath '.\pluginmaster.json' -Encoding utf8
 
       - name: Package plugin files
         shell: pwsh
@@ -42,5 +98,7 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: MutaMaxxing.zip
+          files: |
+            MutaMaxxing.zip
+            pluginmaster.json
           generate_release_notes: true

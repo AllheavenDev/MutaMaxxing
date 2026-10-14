@@ -12,8 +12,8 @@
     "Description": "Select and transmute materia with Mutamix using configurable inventory rules.",
     "IsHide": false,
     "IsTestingExclusive": false,
-    "DownloadLinkInstall": "https://github.com/AllheavenDev/MutaMaxxing/releases/latest/download/MutaMaxxing.zip",
-    "DownloadLinkUpdate": "https://github.com/AllheavenDev/MutaMaxxing/releases/latest/download/MutaMaxxing.zip",
+    "DownloadLinkInstall": "https://github.com/AllheavenDev/MutaMaxxing/releases/download/v0.1.0/MutaMaxxing.zip",
+    "DownloadLinkUpdate": "https://github.com/AllheavenDev/MutaMaxxing/releases/download/v0.1.0/MutaMaxxing.zip",
     "LastUpdate": "1791996424"
   }
 ]
