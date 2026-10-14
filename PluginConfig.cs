@@ -10,7 +10,11 @@ public sealed class PluginConfig : IPluginConfiguration
 
     public bool RequireFiveDifferentMateria { get; set; }
 
+    public bool FallbackToMostCommonMateria { get; set; }
+
     public bool RandomizeInterTradeDelay { get; set; }
+
+    public bool ControlTextAdvanceDuringRuns { get; set; } = true;
 
     public List<MateriaRule> WhitelistRules { get; set; } = [];
 

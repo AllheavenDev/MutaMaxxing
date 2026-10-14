@@ -12,15 +12,20 @@ public sealed class MainWindow : Window, IDisposable
     private readonly MateriaCatalog catalog;
     private readonly PluginConfig config;
     private readonly TransmutationController controller;
+    private readonly MutamixRouteController routeController;
     private readonly Action saveConfiguration;
     private string itemSearch = string.Empty;
+    private bool onlyShowMateriaInBags = true;
+    private int overrideSortColumn = 3;
+    private ImGuiSortDirection overrideSortDirection = ImGuiSortDirection.Descending;
 
-    public MainWindow(MateriaCatalog catalog, PluginConfig config, TransmutationController controller, Action saveConfiguration)
+    public MainWindow(MateriaCatalog catalog, PluginConfig config, TransmutationController controller, MutamixRouteController routeController, Action saveConfiguration)
         : base("MutaMaxxing###MutaMaxxingMainWindow")
     {
         this.catalog = catalog;
         this.config = config;
         this.controller = controller;
+        this.routeController = routeController;
         this.saveConfiguration = saveConfiguration;
         Size = new Vector2(1000, 760);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -28,23 +33,41 @@ public sealed class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
-        ImGui.TextWrapped("Preview and transmute materia from your four player inventory bags. Each trade uses five materia. The game determines the result; these rules control which inventory items may be used.");
-        ImGui.Separator();
+        if (!ImGui.BeginTabBar("mutamaxxing_tabs"))
+            return;
 
-        DrawRunControls();
-        ImGui.Separator();
-        DrawMateriaResults();
-        ImGui.Separator();
-        DrawInventoryPreview();
-        ImGui.Separator();
+        if (ImGui.BeginTabItem("Run"))
+        {
+            DrawRunControls();
+            ImGui.Separator();
+            DrawMateriaResults();
+            ImGui.Separator();
+            DrawInventoryPreview();
+            ImGui.EndTabItem();
+        }
+
         var rulesLocked = controller.IsRunning;
-        if (rulesLocked)
-            ImGui.BeginDisabled();
-        DrawTradeRules();
-        ImGui.Separator();
-        DrawMateriaOverrides();
-        if (rulesLocked)
-            ImGui.EndDisabled();
+        if (ImGui.BeginTabItem("Rules"))
+        {
+            if (rulesLocked)
+                ImGui.BeginDisabled();
+            DrawTradeRules();
+            if (rulesLocked)
+                ImGui.EndDisabled();
+            ImGui.EndTabItem();
+        }
+
+        if (ImGui.BeginTabItem("Overrides"))
+        {
+            if (rulesLocked)
+                ImGui.BeginDisabled();
+            DrawMateriaOverrides();
+            if (rulesLocked)
+                ImGui.EndDisabled();
+            ImGui.EndTabItem();
+        }
+
+        ImGui.EndTabBar();
     }
 
     public void Dispose()
@@ -106,44 +129,67 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.TextDisabled(controller.TradeWindowOpen
             ? "Mutamix's transmutation window is open."
             : "Open Mutamix's Materia Transmutation window before starting.");
-        ImGui.SameLine();
-        ImGui.TextDisabled(controller.TextAdvanceEnabled ? "TextAdvance ready" : "TextAdvance required");
-        if (controller.MutamixDistance is { } mutamixDistance)
+        ImGui.TextDisabled(config.ControlTextAdvanceDuringRuns
+            ? "TextAdvance is managed during the run and restored afterward."
+            : controller.TextAdvanceEnabled ? "TextAdvance is enabled manually." : "Enable TextAdvance manually before starting.");
+
+        var controlTextAdvance = config.ControlTextAdvanceDuringRuns;
+        if (controller.IsRunning)
+            ImGui.BeginDisabled();
+        if (ImGui.Checkbox("Let MutaMaxxing manage TextAdvance during runs", ref controlTextAdvance))
         {
-            ImGui.TextDisabled(controller.MutamixNearby
-                ? $"Mutamix nearby ({mutamixDistance:0.0} yalms)."
-                : $"Mutamix is {mutamixDistance:0.0} yalms away; move within {TransmutationController.MutamixInteractionRange:0} yalms to start.");
+            config.ControlTextAdvanceDuringRuns = controlTextAdvance;
+            SaveConfiguration();
+        }
+        if (controller.IsRunning)
+            ImGui.EndDisabled();
+
+        if (routeController.IsActive)
+        {
+            if (ImGui.Button("Stop route"))
+                routeController.StopByUser();
         }
         else
         {
-            ImGui.TextDisabled($"Mutamix not found nearby; stand within {TransmutationController.MutamixInteractionRange:0} yalms to start.");
+            var routeBlockReason = routeController.StartBlockReason;
+            var canRoute = routeBlockReason.Length == 0;
+            ImGui.BeginDisabled(!canRoute);
+            if (ImGui.Button("Walk to Mutamix"))
+                routeController.Start();
+            ImGui.EndDisabled();
+            if (!canRoute)
+                ImGui.TextWrapped(routeBlockReason);
         }
+        if (routeController.IsActive || !string.Equals(routeController.Status, "Ready to route to Mutamix.", StringComparison.Ordinal))
+            ImGui.TextWrapped(routeController.Status);
 
         if (controller.IsRunning)
         {
             if (ImGui.Button("Stop run"))
                 controller.StopByUser();
+            ImGui.TextDisabled($"{controller.CompletedTransmutations} trades completed this run.");
         }
         else
         {
             var canStart = controller.CanStart(out var startBlockReason);
             ImGui.BeginDisabled(!canStart);
-            if (ImGui.Button("Start run"))
+            if (ImGui.Button("Start run", new Vector2(-1, 0)))
                 controller.Start();
             ImGui.EndDisabled();
             if (!canStart)
-                ImGui.TextDisabled(startBlockReason);
+                ImGui.TextWrapped(startBlockReason);
         }
 
-        ImGui.SameLine();
-        ImGui.TextDisabled($"{controller.CompletedTransmutations} trades completed this run");
-        ImGui.TextWrapped(controller.Status);
+        if (controller.IsRunning || !controller.HasRunSummary)
+            ImGui.TextWrapped(controller.Status);
         ImGui.TextDisabled("Stop prevents another trade. A trade already submitted to the game may still finish.");
     }
 
     private void DrawInventoryPreview()
     {
-        ImGui.Text("Eligible inventory preview");
+        if (!ImGui.CollapsingHeader("Eligible inventory preview"))
+            return;
+
         if (!controller.Inventory.IsReady)
         {
             ImGui.TextDisabled(controller.Inventory.Message);
@@ -193,9 +239,9 @@ public sealed class MainWindow : Window, IDisposable
             SaveConfiguration();
         }
 
-        ImGui.TextDisabled(tradeAll
-            ? "The whitelist is ignored. Every materia in the inventory is eligible unless a blacklist rule excludes it."
-            : "Only whitelist matches are eligible. A blacklist match always wins.");
+        ImGui.TextWrapped(tradeAll
+            ? "Trade all materia in your bags except blacklisted matches."
+            : "Only whitelist matches are eligible. Blacklist rules always win.");
 
         var requireFiveDifferent = config.RequireFiveDifferentMateria;
         if (ImGui.Checkbox("Require five different materia of one grade", ref requireFiveDifferent))
@@ -203,7 +249,20 @@ public sealed class MainWindow : Window, IDisposable
             config.RequireFiveDifferentMateria = requireFiveDifferent;
             SaveConfiguration();
         }
-        ImGui.TextDisabled("Every trade uses one grade only. When enabled, all five inputs must also be different materia types.");
+        ImGui.TextWrapped("Trades never mix grades. Prefer five different types, or require five when fallback is off.");
+
+        if (requireFiveDifferent)
+        {
+            ImGui.Indent();
+            var fallbackToMostCommon = config.FallbackToMostCommonMateria;
+            if (ImGui.Checkbox("Fallback to the most common type when needed", ref fallbackToMostCommon))
+            {
+                config.FallbackToMostCommonMateria = fallbackToMostCommon;
+                SaveConfiguration();
+            }
+            ImGui.TextWrapped("When five types are unavailable, use each eligible type once, then add copies from the most common type first.");
+            ImGui.Unindent();
+        }
 
         var randomizeInterTradeDelay = config.RandomizeInterTradeDelay;
         if (ImGui.Checkbox("Add randomized delay between trades (50–70 ms)", ref randomizeInterTradeDelay))
@@ -211,7 +270,7 @@ public sealed class MainWindow : Window, IDisposable
             config.RandomizeInterTradeDelay = randomizeInterTradeDelay;
             SaveConfiguration();
         }
-        ImGui.TextDisabled("Adds a random 50–70 ms pause after each completed trade (average 60 ms).");
+        ImGui.TextWrapped("Waits a random 50–70 ms after each completed trade.");
 
         if (!tradeAll)
         {
@@ -219,9 +278,9 @@ public sealed class MainWindow : Window, IDisposable
                 SaveConfiguration();
         }
 
-        if (ImGui.CollapsingHeader("Blacklist category and grade", ImGuiTreeNodeFlags.DefaultOpen))
+        if (ImGui.CollapsingHeader("Blacklist category and grade"))
         {
-            ImGui.TextDisabled("Blacklisted matches are never selected, even if they also match the whitelist.");
+            ImGui.TextWrapped("Blacklisted matches are never selected, even when whitelisted.");
             if (DrawRuleMatrix("Blacklist", "blacklist", config.BlacklistRules))
                 SaveConfiguration();
         }
@@ -229,39 +288,58 @@ public sealed class MainWindow : Window, IDisposable
 
     private void DrawMateriaOverrides()
     {
-        if (!ImGui.CollapsingHeader("Specific materia overrides", ImGuiTreeNodeFlags.DefaultOpen))
-            return;
-
-        ImGui.TextDisabled("Whitelist item checks apply only in whitelist mode. Blacklist item checks always apply and take priority.");
+        ImGui.Text("Specific materia overrides");
+        ImGui.TextWrapped("Item whitelist checks apply in whitelist mode. Blacklist checks always take priority.");
         ImGui.SetNextItemWidth(300);
         ImGui.InputTextWithHint("##materia_search", "Search materia name or stat", ref itemSearch, 128);
+        ImGui.SameLine();
+        ImGui.Checkbox("Only show materia in bags", ref onlyShowMateriaInBags);
 
-        if (!ImGui.BeginChild("materia_overrides_list", new Vector2(0, 280), true))
+        var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Sortable | ImGuiTableFlags.ScrollY;
+        if (ImGui.BeginTable("materia_overrides_table", 6, tableFlags, new Vector2(0, ImGui.GetContentRegionAvail().Y)))
         {
-            ImGui.EndChild();
-            return;
-        }
-
-        if (ImGui.BeginTable("materia_overrides_table", 6, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
-        {
+            ImGui.TableSetupScrollFreeze(0, 1);
             ImGui.TableSetupColumn("Materia", ImGuiTableColumnFlags.WidthStretch);
-            ImGui.TableSetupColumn("Group", ImGuiTableColumnFlags.WidthFixed, 95);
-            ImGui.TableSetupColumn("Grade", ImGuiTableColumnFlags.WidthFixed, 55);
-            ImGui.TableSetupColumn("In bags", ImGuiTableColumnFlags.WidthFixed, 55);
-            ImGui.TableSetupColumn("Whitelist", ImGuiTableColumnFlags.WidthFixed, 75);
-            ImGui.TableSetupColumn("Blacklist", ImGuiTableColumnFlags.WidthFixed, 75);
+            ImGui.TableSetupColumn("Group", ImGuiTableColumnFlags.WidthFixed, 85);
+            ImGui.TableSetupColumn("Grade", ImGuiTableColumnFlags.WidthFixed, 58);
+            ImGui.TableSetupColumn("In bags", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.PreferSortDescending, 75);
+            ImGui.TableSetupColumn("Whitelist", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoSort, 75);
+            ImGui.TableSetupColumn("Blacklist", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoSort, 75);
             ImGui.TableHeadersRow();
+
+            var sortSpecs = ImGui.TableGetSortSpecs();
+            if (sortSpecs.SpecsDirty && sortSpecs.SpecsCount > 0)
+            {
+                overrideSortColumn = sortSpecs.Specs[0].ColumnIndex;
+                overrideSortDirection = sortSpecs.Specs[0].SortDirection;
+                sortSpecs.SpecsDirty = false;
+            }
 
             var counts = controller.Inventory.IsReady
                 ? controller.Inventory.CountByItemId()
                 : new Dictionary<uint, uint>();
-            foreach (var materia in catalog.Entries)
+            var rows = catalog.Entries
+                .Where(materia => itemSearch.Length == 0 ||
+                                  materia.Name.Contains(itemSearch, StringComparison.CurrentCultureIgnoreCase) ||
+                                  materia.BaseParamName.Contains(itemSearch, StringComparison.CurrentCultureIgnoreCase))
+                .Select(materia => (Materia: materia, Count: counts.GetValueOrDefault(materia.ItemId)))
+                .Where(row => !onlyShowMateriaInBags || row.Count > 0)
+                .ToList();
+            IEnumerable<(MateriaDefinition Materia, uint Count)> sortedRows = overrideSortColumn switch
             {
-                if (itemSearch.Length > 0 &&
-                    !materia.Name.Contains(itemSearch, StringComparison.CurrentCultureIgnoreCase) &&
-                    !materia.BaseParamName.Contains(itemSearch, StringComparison.CurrentCultureIgnoreCase))
-                    continue;
+                0 when overrideSortDirection == ImGuiSortDirection.Descending => rows.OrderByDescending(row => row.Materia.Name, StringComparer.CurrentCultureIgnoreCase),
+                1 when overrideSortDirection == ImGuiSortDirection.Descending => rows.OrderByDescending(row => row.Materia.Category),
+                2 when overrideSortDirection == ImGuiSortDirection.Descending => rows.OrderByDescending(row => row.Materia.Tier),
+                3 when overrideSortDirection == ImGuiSortDirection.Ascending => rows.OrderBy(row => row.Count),
+                3 => rows.OrderByDescending(row => row.Count),
+                2 => rows.OrderBy(row => row.Materia.Tier),
+                1 => rows.OrderBy(row => row.Materia.Category),
+                _ => rows.OrderBy(row => row.Materia.Name, StringComparer.CurrentCultureIgnoreCase),
+            };
 
+            foreach (var row in sortedRows)
+            {
+                var materia = row.Materia;
                 ImGui.PushID((int)materia.ItemId);
                 ImGui.TableNextRow();
                 ImGui.TableSetColumnIndex(0);
@@ -271,7 +349,7 @@ public sealed class MainWindow : Window, IDisposable
                 ImGui.TableSetColumnIndex(2);
                 ImGui.Text(ToRoman(materia.Tier));
                 ImGui.TableSetColumnIndex(3);
-                ImGui.Text(counts.GetValueOrDefault(materia.ItemId).ToString());
+                ImGui.Text(row.Count.ToString());
 
                 ImGui.TableSetColumnIndex(4);
                 var isWhitelisted = config.WhitelistMateriaIds.Contains(materia.ItemId);
@@ -300,8 +378,6 @@ public sealed class MainWindow : Window, IDisposable
 
             ImGui.EndTable();
         }
-
-        ImGui.EndChild();
     }
 
     private bool DrawRuleMatrix(string label, string id, List<MateriaRule> rules)

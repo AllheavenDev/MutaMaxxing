@@ -18,6 +18,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly MateriaCatalog catalog;
     private readonly PluginConfig config;
     private readonly TransmutationController controller;
+    private readonly MutamixRouteController routeController;
     private readonly MainWindow mainWindow;
 
     [PluginService]
@@ -57,7 +58,8 @@ public sealed class Plugin : IDalamudPlugin
         var inventoryReader = new InventoryReader();
         var textAdvance = new TextAdvanceIpc(PluginInterface);
         controller = new TransmutationController(ClientState, ObjectTable, Log, catalog, inventoryReader, config, textAdvance);
-        mainWindow = new MainWindow(catalog, config, controller, () => PluginInterface.SavePluginConfig(config));
+        routeController = new MutamixRouteController(DataManager, PluginInterface, ClientState, ObjectTable, Log);
+        mainWindow = new MainWindow(catalog, config, controller, routeController, () => PluginInterface.SavePluginConfig(config));
 
         windowSystem.AddWindow(mainWindow);
         PluginInterface.UiBuilder.Draw += windowSystem.Draw;
@@ -74,6 +76,7 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
+        routeController.Dispose();
         controller.Dispose();
         CommandManager.RemoveHandler(CommandName);
         AddonLifecycle.UnregisterListener(OnTradeMultipleLifecycle);
@@ -87,7 +90,11 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OpenWindow() => mainWindow.IsOpen = true;
 
-    private void OnFrameworkUpdate(IFramework _) => controller.Update();
+    private void OnFrameworkUpdate(IFramework _)
+    {
+        controller.Update();
+        routeController.Update();
+    }
 
     private void OnTradeMultipleLifecycle(AddonEvent type, AddonArgs args)
     {

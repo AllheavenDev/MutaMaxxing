@@ -1,0 +1,46 @@
+name: Package plugin release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build plugin
+        run: dotnet build .\MutaMaxxing.csproj --configuration Release -p:NuGetAudit=false
+
+      - name: Package plugin files
+        shell: pwsh
+        run: |
+          $packageDirectory = Join-Path $env:RUNNER_TEMP 'MutaMaxxing'
+          New-Item -ItemType Directory -Force -Path $packageDirectory | Out-Null
+
+          $artifacts = Get-ChildItem -LiteralPath '.\bin\Release' -File |
+              Where-Object { $_.Name -like 'MutaMaxxing.*' -and $_.Extension -in '.dll', '.json' }
+
+          if (-not ($artifacts | Where-Object { $_.Name -eq 'MutaMaxxing.dll' })) {
+              throw 'MutaMaxxing.dll was not found in the Release build output.'
+          }
+
+          $artifacts | Copy-Item -Destination $packageDirectory -Force
+          Compress-Archive -Path (Join-Path $packageDirectory '*') -DestinationPath '.\MutaMaxxing.zip' -Force
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MutaMaxxing.zip
+          generate_release_notes: true

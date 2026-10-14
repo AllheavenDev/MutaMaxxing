@@ -29,6 +29,9 @@ public sealed class TextAdvanceIpc
         disableExternalControl = pluginInterface.GetIpcSubscriber<string, bool>("TextAdvance.DisableExternalControl");
     }
 
+    public bool CanAcquireExternalControl =>
+        isEnabled.HasFunction && enableExternalControl.HasFunction && disableExternalControl.HasFunction;
+
     public bool IsAvailableAndEnabled()
     {
         try
@@ -43,7 +46,7 @@ public sealed class TextAdvanceIpc
 
     public bool TryAcquire()
     {
-        if (!IsAvailableAndEnabled())
+        if (!CanAcquireExternalControl)
             return false;
 
         try

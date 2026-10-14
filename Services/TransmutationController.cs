@@ -110,14 +110,21 @@ public sealed unsafe class TransmutationController
                     : $"Mutamix was not found nearby. Stand within {MutamixInteractionRange:0} yalms before starting.";
             if (!tradeWindowOpen)
                 return "Open Mutamix's Materia Transmutation window first.";
-            if (!TextAdvanceEnabled)
-                return "TextAdvance must be installed, enabled, and responding to IPC.";
+            if (config.ControlTextAdvanceDuringRuns)
+            {
+                if (!textAdvance.CanAcquireExternalControl)
+                    return "TextAdvance must be installed and responding to IPC.";
+            }
+            else if (!TextAdvanceEnabled)
+            {
+                return "Enable TextAdvance or let MutaMaxxing control it during runs.";
+            }
             if (!Inventory.IsReady)
                 return Inventory.Message;
             if (EligibleItemCount < 5)
                 return $"Only {EligibleItemCount} eligible materia found; at least five are needed.";
             if (EligibleTierCount == 0)
-                return config.RequireFiveDifferentMateria
+                return config.RequireFiveDifferentMateria && !config.FallbackToMostCommonMateria
                     ? "No single materia grade has five distinct eligible types. A trade cannot mix grades."
                     : "No single materia grade has five eligible materia. A trade cannot mix grades.";
 
@@ -235,12 +242,14 @@ public sealed unsafe class TransmutationController
             return false;
         }
 
-        if (!textAdvance.TryAcquire())
+        if (config.ControlTextAdvanceDuringRuns && !textAdvance.TryAcquire())
         {
             TextAdvanceEnabled = textAdvance.IsAvailableAndEnabled();
-            Status = "TextAdvance could not grant MutaMaxxing control. It may be controlled by another plugin.";
+            Status = "TextAdvance could not grant MutaMaxxing control. Another plugin may own its IPC control.";
             return false;
         }
+
+        TextAdvanceEnabled = textAdvance.IsAvailableAndEnabled();
 
         selectedMateria.Clear();
         pendingSelection = null;
@@ -322,15 +331,34 @@ public sealed unsafe class TransmutationController
             var finished = selectedCount == 0 && selectedMateria.Count == 0 && CompletedTransmutations > 0;
             Stop(finished
                 ? "Run complete: no complete eligible batch remains."
-                : config.RequireFiveDifferentMateria
+                : config.RequireFiveDifferentMateria && !config.FallbackToMostCommonMateria
                     ? "Stopped because no single grade has five distinct eligible materia types for this trade. Clear any partial selection in Mutamix before restarting."
                     : "Stopped because no single grade has five eligible materia for this trade. Clear any partial selection in Mutamix before restarting.");
             return;
         }
 
-        var quantity = config.RequireFiveDifferentMateria
-            ? 1
-            : Math.Min(5 - selectedCount, checked((int)candidate.Quantity));
+        var candidateTier = catalog.TryGet(candidate.ItemId, out var candidateDefinition) ? candidateDefinition.Tier : 0;
+        var isFallbackBatch = config.RequireFiveDifferentMateria &&
+                              config.FallbackToMostCommonMateria &&
+                              IsFallbackTier(candidateTier);
+        var quantity = Math.Min(5 - selectedCount, checked((int)candidate.Quantity));
+        if (config.RequireFiveDifferentMateria)
+        {
+            if (!isFallbackBatch)
+            {
+                quantity = 1;
+            }
+            else
+            {
+                var plannedQuantity = GetFallbackBatchPlan(candidateTier)
+                    .FirstOrDefault(item => item.ItemId == candidate.ItemId)
+                    .Quantity;
+                var alreadySelected = selectedMateria
+                    .Where(item => item.ItemId == candidate.ItemId)
+                    .Sum(item => (int)item.Quantity);
+                quantity = Math.Min(quantity, plannedQuantity - alreadySelected);
+            }
+        }
         if (quantity <= 0)
         {
             Stop("Stopped because an eligible inventory stack had an invalid quantity.");
@@ -368,18 +396,26 @@ public sealed unsafe class TransmutationController
         if (batchTier is null)
             return null;
 
+        var fallbackBatch = IsFallbackTier(batchTier.Value);
+        IReadOnlyList<(uint ItemId, int Quantity)> fallbackPlan = fallbackBatch
+            ? GetFallbackBatchPlan(batchTier.Value)
+            : [];
+
         var selectedSlots = selectedMateria.Select(x => (x.Container, x.Slot)).ToHashSet();
-        var selectedItemIds = selectedMateria.Select(x => x.ItemId).ToHashSet();
+        var selectedQuantities = selectedMateria
+            .GroupBy(item => item.ItemId)
+            .ToDictionary(group => group.Key, group => group.Sum(item => (int)item.Quantity));
         if (pendingSelection is { } pending)
         {
             selectedSlots.Add((pending.Container, pending.Slot));
-            selectedItemIds.Add(pending.ItemId);
+            selectedQuantities[pending.ItemId] = selectedQuantities.GetValueOrDefault(pending.ItemId) + checked((int)pending.Quantity);
         }
 
         var manager = InventoryManager.Instance();
         if (manager == null)
             return null;
 
+        var candidates = new List<InventoryStack>();
         foreach (var stack in Inventory.Stacks)
         {
             if (stack.Quantity == 0 || !catalog.TryGet(stack.ItemId, out var definition) || !IsEligible(definition))
@@ -388,7 +424,7 @@ public sealed unsafe class TransmutationController
             if (definition.Tier != batchTier.Value)
                 continue;
 
-            if (config.RequireFiveDifferentMateria && selectedItemIds.Contains(stack.ItemId))
+            if (config.RequireFiveDifferentMateria && !fallbackBatch && selectedQuantities.ContainsKey(stack.ItemId))
                 continue;
 
             if (selectedSlots.Contains((stack.Container, stack.Slot)))
@@ -399,10 +435,31 @@ public sealed unsafe class TransmutationController
             if (slot == null || IsSelected(agent, stack.Container, stack.Slot))
                 continue;
 
-            return stack;
+            candidates.Add(stack);
         }
 
-        return null;
+        if (!fallbackBatch)
+            return candidates.FirstOrDefault();
+
+        // Select every eligible type once before taking planned extra copies,
+        // which are allocated by descending inventory count.
+        var incompleteType = fallbackPlan.FirstOrDefault(item =>
+            selectedQuantities.GetValueOrDefault(item.ItemId) > 0 &&
+            selectedQuantities.GetValueOrDefault(item.ItemId) < item.Quantity);
+        var nextType = incompleteType.ItemId != 0
+            ? incompleteType.ItemId
+            : fallbackPlan.FirstOrDefault(item =>
+                item.Quantity == 1 && selectedQuantities.GetValueOrDefault(item.ItemId) == 0).ItemId;
+        if (nextType == 0)
+        {
+            nextType = fallbackPlan.FirstOrDefault(item =>
+                selectedQuantities.GetValueOrDefault(item.ItemId) < item.Quantity).ItemId;
+        }
+
+        return candidates
+            .Where(stack => stack.ItemId == nextType)
+            .OrderByDescending(stack => stack.Quantity)
+            .FirstOrDefault();
     }
 
     private void SubmitTrade(AgentTradeMultiple* agent, DateTime now)
@@ -413,16 +470,15 @@ public sealed unsafe class TransmutationController
             return;
         }
 
-        if (config.RequireFiveDifferentMateria &&
-            (selectedMateria.Any(x => x.Quantity != 1) || selectedMateria.Select(x => x.ItemId).Distinct().Count() != 5))
-        {
-            Stop("Stopped because the selected batch did not contain five different materia types.");
-            return;
-        }
-
         if (!SelectedMateriaShareTier())
         {
             Stop("Stopped because the selected batch contained more than one materia grade.");
+            return;
+        }
+
+        if (config.RequireFiveDifferentMateria && !HasValidDifferentMateriaSelection())
+        {
+            Stop("Stopped because the selected batch did not follow the five-different materia rule or its fallback.");
             return;
         }
 
@@ -433,6 +489,12 @@ public sealed unsafe class TransmutationController
             return;
         }
         RefreshEligibility();
+
+        if (config.RequireFiveDifferentMateria && !HasValidDifferentMateriaSelection())
+        {
+            Stop("Stopped before trade because inventory changed and the selected batch no longer matches the five-different rule or fallback.");
+            return;
+        }
 
         foreach (var selected in selectedMateria)
         {
@@ -579,10 +641,73 @@ public sealed unsafe class TransmutationController
             .ToArray();
     }
 
-    private bool CanCompleteTrade(IGrouping<int, (MateriaDefinition Materia, uint Count)> tierGroup) =>
-        config.RequireFiveDifferentMateria
-            ? tierGroup.Select(item => item.Materia.ItemId).Distinct().Take(5).Count() == 5
-            : tierGroup.Sum(item => (long)item.Count) >= 5;
+    private bool CanCompleteTrade(IGrouping<int, (MateriaDefinition Materia, uint Count)> tierGroup)
+    {
+        var itemCount = tierGroup.Sum(item => (long)item.Count);
+        if (!config.RequireFiveDifferentMateria)
+            return itemCount >= 5;
+
+        var distinctTypeCount = tierGroup.Select(item => item.Materia.ItemId).Distinct().Take(5).Count();
+        return distinctTypeCount == 5 ||
+               config.FallbackToMostCommonMateria && distinctTypeCount < 5 && itemCount >= 5;
+    }
+
+    private bool IsFallbackTier(int tier) =>
+        config.RequireFiveDifferentMateria &&
+        config.FallbackToMostCommonMateria &&
+        EligibleMateria
+            .Where(item => item.Materia.Tier == tier)
+            .Select(item => item.Materia.ItemId)
+            .Distinct()
+            .Take(5)
+            .Count() < 5;
+
+    private IReadOnlyList<(uint ItemId, int Quantity)> GetFallbackBatchPlan(int tier)
+    {
+        var materia = EligibleMateria
+            .Where(item => item.Materia.Tier == tier)
+            .OrderByDescending(item => item.Count)
+            .ThenBy(item => item.Materia.ItemId)
+            .ToArray();
+        if (materia.Length >= 5)
+            return [];
+
+        var remainingCopies = 5 - materia.Length;
+        var plan = materia.Select(item => (ItemId: item.Materia.ItemId, Quantity: 1)).ToArray();
+        for (var index = 0; index < materia.Length && remainingCopies > 0; index++)
+        {
+            var extraCopies = (int)Math.Min(materia[index].Count - 1, (uint)remainingCopies);
+            plan[index].Quantity += extraCopies;
+            remainingCopies -= extraCopies;
+        }
+
+        return plan;
+    }
+
+    private bool HasValidDifferentMateriaSelection()
+    {
+        if (selectedMateria.Count == 0 || !catalog.TryGet(selectedMateria[0].ItemId, out var selectedDefinition))
+            return false;
+
+        var selectedQuantities = selectedMateria
+            .GroupBy(item => item.ItemId)
+            .ToDictionary(group => group.Key, group => group.Sum(item => (int)item.Quantity));
+        var eligibleTypeIds = EligibleMateria
+            .Where(item => item.Materia.Tier == selectedDefinition.Tier)
+            .Select(item => item.Materia.ItemId)
+            .ToHashSet();
+        var fallbackBatch = IsFallbackTier(selectedDefinition.Tier);
+        if (!selectedQuantities.Keys.All(eligibleTypeIds.Contains))
+            return false;
+
+        if (!fallbackBatch)
+            return selectedQuantities.Count == 5 && selectedQuantities.Values.All(quantity => quantity == 1);
+
+        var fallbackPlan = GetFallbackBatchPlan(selectedDefinition.Tier)
+            .ToDictionary(item => item.ItemId, item => item.Quantity);
+        return selectedQuantities.Count == fallbackPlan.Count &&
+               fallbackPlan.All(pair => selectedQuantities.GetValueOrDefault(pair.Key) == pair.Value);
+    }
 
     private int? GetBatchTier()
     {

@@ -1,0 +1,19 @@
+[
+  {
+    "Author": "Shikaare",
+    "Name": "MutaMaxxing",
+    "InternalName": "MutaMaxxing",
+    "AssemblyVersion": "0.1.0.0",
+    "TestingAssemblyVersion": null,
+    "RepoUrl": "https://github.com/AllheavenDev/MutaMaxxing",
+    "ApplicableVersion": "any",
+    "DalamudApiLevel": 15,
+    "Punchline": "Batch materia transmutation with Mutamix.",
+    "Description": "Select and transmute materia with Mutamix using configurable inventory rules.",
+    "IsHide": false,
+    "IsTestingExclusive": false,
+    "DownloadLinkInstall": "https://github.com/AllheavenDev/MutaMaxxing/releases/latest/download/MutaMaxxing.zip",
+    "DownloadLinkUpdate": "https://github.com/AllheavenDev/MutaMaxxing/releases/latest/download/MutaMaxxing.zip",
+    "LastUpdate": "1791996424"
+  }
+]
