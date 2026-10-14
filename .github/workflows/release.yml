@@ -71,7 +71,8 @@ jobs:
               throw "SDK API level $($Matches.api) does not match build API level $buildApiLevel."
           }
 
-          $taggedZip = "https://github.com/AllheavenDev/MutaMaxxing/releases/download/$tag/MutaMaxxing.zip"
+          $repositoryUrl = "$($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)"
+          $taggedZip = "$repositoryUrl/releases/download/$tag/MutaMaxxing.zip"
           $feed[0].AssemblyVersion = $expectedAssemblyVersion
           $feed[0].DalamudApiLevel = $buildApiLevel
           $feed[0].LastUpdate = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
