@@ -1,6 +1,6 @@
 # MutaMaxxing Agent Instructions
 
-These rules apply to the MutaMaxxing repository in addition to the workspace-level `../AGENTS.md`.
+These rules apply throughout the MutaMaxxing repository. When it is inside the local Dalamud plugin development workspace, also follow the workspace-level `../AGENTS.md`.
 
 ## Delegation and repository workflow
 
