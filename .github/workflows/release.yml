@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   release:
+    if: github.ref_name != 'v0.1.0'
     runs-on: windows-2022
     steps:
       - name: Check out source
