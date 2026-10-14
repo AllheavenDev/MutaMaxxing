@@ -23,10 +23,10 @@ Open `/mutamaxxing`, choose your rules, then open Mutamix's Materia Transmutatio
 ## Link to insert into Dalamud Experimental
 
 ```text
-https://github.com/AllheavenDev/MutaMaxxing/releases/latest/download/pluginmaster.json
+https://raw.githubusercontent.com/AllheavenDev/MutaMaxxing/main/pluginmaster.json
 ```
 
-In Dalamud, open `/xlsettings` → **Experimental** → **Custom Plugin Repositories**, paste the link, save it, and refresh the Plugin Installer. The repository must be public and have a release before Dalamud can fetch and install the plugin.
+In Dalamud, open `/xlsettings` → **Experimental** → **Custom Plugin Repositories**, paste the link, save it, and refresh the Plugin Installer. The feed is available now. Installation and updates will work after a GitHub release publishes the `MutaMaxxing.zip` package referenced by the feed.
 
 ## About and contributions
 
