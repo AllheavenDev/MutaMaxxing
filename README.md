@@ -32,6 +32,10 @@ In Dalamud, open `/xlsettings` → **Experimental** → **Custom Plugin Reposito
 
 This started as a plugin I made for myself and is 100% vibe coded. Ideas and optimizations are welcome as issues or pull requests. See [AI_USAGE.md](AI_USAGE.md) for the AI usage note.
 
+## License
+
+Licensed under the MIT License. See [LICENSE](LICENSE).
+
 ## Repository
 
 [AllheavenDev/MutaMaxxing](https://github.com/AllheavenDev/MutaMaxxing)
