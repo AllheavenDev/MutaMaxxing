@@ -8,6 +8,8 @@ public sealed class PluginConfig : IPluginConfiguration
 
     public bool TradeAllExceptBlacklist { get; set; }
 
+    public bool RequireFiveDifferentMateria { get; set; }
+
     public List<MateriaRule> WhitelistRules { get; set; } = [];
 
     public List<MateriaRule> BlacklistRules { get; set; } = [];

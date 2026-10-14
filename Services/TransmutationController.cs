@@ -96,6 +96,8 @@ public sealed unsafe class TransmutationController
                 return "TextAdvance must be installed, enabled, and responding to IPC.";
             if (!Inventory.IsReady)
                 return Inventory.Message;
+            if (config.RequireFiveDifferentMateria && EligibleMateria.Count < 5)
+                return $"Only {EligibleMateria.Count} distinct eligible materia types found; five are needed for this option.";
             if (EligibleItemCount < 5)
                 return $"Only {EligibleItemCount} eligible materia found; at least five are needed.";
 
@@ -283,11 +285,15 @@ public sealed unsafe class TransmutationController
         var candidate = FindNextStack(agent);
         if (candidate is null)
         {
-            Stop($"Stopped with {EligibleItemCount} eligible materia remaining; fewer than five can be selected safely.");
+            Stop(config.RequireFiveDifferentMateria
+                ? "Stopped because fewer than five distinct eligible materia types remain for this trade. Clear the partial selection in Mutamix before restarting."
+                : $"Stopped with {EligibleItemCount} eligible materia remaining; fewer than five can be selected safely.");
             return;
         }
 
-        var quantity = Math.Min(5 - selectedCount, checked((int)candidate.Quantity));
+        var quantity = config.RequireFiveDifferentMateria
+            ? 1
+            : Math.Min(5 - selectedCount, checked((int)candidate.Quantity));
         if (quantity <= 0)
         {
             Stop("Stopped because an eligible inventory stack had an invalid quantity.");
@@ -321,8 +327,12 @@ public sealed unsafe class TransmutationController
     private InventoryStack? FindNextStack(AgentTradeMultiple* agent)
     {
         var selectedSlots = selectedMateria.Select(x => (x.Container, x.Slot)).ToHashSet();
+        var selectedItemIds = selectedMateria.Select(x => x.ItemId).ToHashSet();
         if (pendingSelection is { } pending)
+        {
             selectedSlots.Add((pending.Container, pending.Slot));
+            selectedItemIds.Add(pending.ItemId);
+        }
 
         var manager = InventoryManager.Instance();
         if (manager == null)
@@ -331,6 +341,9 @@ public sealed unsafe class TransmutationController
         foreach (var stack in Inventory.Stacks)
         {
             if (stack.Quantity == 0 || !catalog.TryGet(stack.ItemId, out var definition) || !IsEligible(definition))
+                continue;
+
+            if (config.RequireFiveDifferentMateria && selectedItemIds.Contains(stack.ItemId))
                 continue;
 
             if (selectedSlots.Contains((stack.Container, stack.Slot)))
@@ -352,6 +365,13 @@ public sealed unsafe class TransmutationController
         if (selectedMateria.Sum(x => (int)x.Quantity) != 5)
         {
             Stop("Stopped because the selected materia did not match the five-item trade requirement.");
+            return;
+        }
+
+        if (config.RequireFiveDifferentMateria &&
+            (selectedMateria.Any(x => x.Quantity != 1) || selectedMateria.Select(x => x.ItemId).Distinct().Count() != 5))
+        {
+            Stop("Stopped because the selected batch did not contain five different materia types.");
             return;
         }
 

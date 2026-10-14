@@ -100,7 +100,9 @@ public sealed class MainWindow : Window, IDisposable
         }
 
         var eligible = controller.EligibleMateria;
-        ImGui.Text($"Eligible materia: {controller.EligibleItemCount}  |  Complete trades available: {controller.EligibleItemCount / 5}");
+        ImGui.Text(config.RequireFiveDifferentMateria
+            ? $"Eligible materia: {controller.EligibleItemCount}  |  Distinct types: {eligible.Count}"
+            : $"Eligible materia: {controller.EligibleItemCount}  |  Complete trades available: {controller.EligibleItemCount / 5}");
         if (eligible.Count == 0)
         {
             ImGui.TextDisabled("No inventory materia currently match these rules.");
@@ -145,6 +147,14 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.TextDisabled(tradeAll
             ? "The whitelist is ignored. Every materia in the inventory is eligible unless a blacklist rule excludes it."
             : "Only whitelist matches are eligible. A blacklist match always wins.");
+
+        var requireFiveDifferent = config.RequireFiveDifferentMateria;
+        if (ImGui.Checkbox("Require five different materia in each trade", ref requireFiveDifferent))
+        {
+            config.RequireFiveDifferentMateria = requireFiveDifferent;
+            SaveConfiguration();
+        }
+        ImGui.TextDisabled("Each batch uses one of five different materia types. A type may be used again in later trades.");
 
         if (!tradeAll)
         {
