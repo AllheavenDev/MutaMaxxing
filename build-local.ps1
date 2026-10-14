@@ -27,7 +27,38 @@ try {
     & $dotnet build '.\MutaMaxxing.csproj' --configuration Debug --no-restore
     if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE." }
 
-    Write-Host "Dalamud Dev Plugin Locations folder: $(Join-Path $repoRoot 'bin\Debug')"
+    $buildOutput = Join-Path $repoRoot 'bin\Debug'
+    $pluginOutput = Join-Path $referenceRoot 'local-plugin'
+    New-Item -ItemType Directory -Force -Path $pluginOutput | Out-Null
+    $pluginOutput = (Resolve-Path -LiteralPath $pluginOutput).Path
+
+    $artifacts = @(Get-ChildItem -LiteralPath $buildOutput -File |
+        Where-Object { $_.Name -like 'MutaMaxxing.*' -and $_.Extension -in '.dll', '.json' })
+    if (-not ($artifacts | Where-Object { $_.Name -eq 'MutaMaxxing.dll' })) {
+        throw "MutaMaxxing.dll was not found in $buildOutput."
+    }
+
+    # The staging folder is shared with TouristMod and AnoMech; remove only
+    # MutaMaxxing-owned files so rebuilding this plugin preserves the others.
+    Get-ChildItem -LiteralPath $pluginOutput -File |
+        Where-Object { $_.Name -like 'MutaMaxxing.*' } |
+        Remove-Item -Force
+
+    foreach ($artifact in $artifacts) {
+        Copy-Item -LiteralPath $artifact.FullName -Destination $pluginOutput -Force
+    }
+
+    $sourceDll = Join-Path $buildOutput 'MutaMaxxing.dll'
+    $destinationDll = Join-Path $pluginOutput 'MutaMaxxing.dll'
+    $sourceHash = (Get-FileHash -LiteralPath $sourceDll -Algorithm SHA256).Hash
+    $destinationHash = (Get-FileHash -LiteralPath $destinationDll -Algorithm SHA256).Hash
+    if ($sourceHash -ne $destinationHash) {
+        throw "MutaMaxxing.dll copy verification failed: source hash $sourceHash != destination hash $destinationHash."
+    }
+
+    Write-Host "Dalamud Dev Plugin Locations folder: $pluginOutput"
+    Write-Host "Plugin DLL: $destinationDll"
+    Write-Host "MutaMaxxing.dll SHA256: $destinationHash"
 }
 finally {
     Pop-Location

@@ -28,7 +28,13 @@ The project targets Dalamud API 15 and .NET 10, matching the current local plugi
 .\build-local.ps1
 ```
 
-The helper builds a Debug plugin into `bin/Debug`. Add that folder to Dalamud's **Settings → Experimental → Dev Plugin Locations**. It prefers the .NET 10 SDK and package cache used by the sibling TouristMod project in this workspace, then falls back to the `dotnet` on PATH.
+The helper builds a Debug plugin and stages `MutaMaxxing.dll` plus its manifest and dependency metadata into the shared local plugin folder:
+
+```text
+<workspace>\TouristMod-AutoTour\local-plugin\
+```
+
+That is the same folder used by TouristMod and AnoMech. The helper removes or replaces only `MutaMaxxing.*` files, preserving the other plugins. This workspace's Dalamud config now lists `MutaMaxxing.dll` as a Dev Plugin Location. For another Dalamud profile or machine, add the full DLL path printed by the helper to **Settings → Experimental → Dev Plugin Locations**. Refresh the dev plugin list or restart Dalamud after building. The helper prefers the .NET 10 SDK and package cache used by the sibling TouristMod project, then falls back to the `dotnet` on PATH.
 
 ## In-game test loop
 
@@ -43,4 +49,4 @@ The source has not yet been loaded in game. No live materia exchange has been pe
 
 ## Repository notes
 
-The source repository is private at [AllheavenDev/MutaMaxxing](https://github.com/AllheavenDev/MutaMaxxing). A distribution license has not been selected yet; decide that before making the repository public or publishing binaries.
+The source repository is private at [AllheavenDev/MutaMaxxing](https://github.com/AllheavenDev/MutaMaxxing). A custom Dalamud repository feed is not available while the source stays private: Dalamud fetches custom repository JSON without authentication, and each entry must point to a downloadable plugin ZIP. Use the local dev plugin folder above for now. A distribution license has not been selected yet; decide that before making the repository public or publishing binaries. See [Dalamud's custom repository guide](https://dalamud.dev/plugin-publishing/custom-repositories/) for the feed and release format.
