@@ -1,3 +1,5 @@
+using System.Numerics;
+using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
@@ -8,12 +10,15 @@ namespace MutaMaxxing.Services;
 public sealed unsafe class TransmutationController
 {
     private static readonly TimeSpan InventoryRefreshInterval = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan MutamixProximityRefreshInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan SelectionInterval = TimeSpan.FromMilliseconds(150);
     private static readonly TimeSpan SelectionTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan TransactionTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan TextAdvanceProbeInterval = TimeSpan.FromSeconds(2);
+    public const float MutamixInteractionRange = 5f;
 
     private readonly IClientState clientState;
+    private readonly IObjectTable objectTable;
     private readonly IPluginLog log;
     private readonly MateriaCatalog catalog;
     private readonly InventoryReader inventoryReader;
@@ -22,6 +27,7 @@ public sealed unsafe class TransmutationController
     private readonly List<SelectedMateria> selectedMateria = [];
 
     private DateTime inventoryRefreshAt;
+    private DateTime mutamixProximityRefreshAt;
     private DateTime nextActionAt;
     private DateTime textAdvanceProbeAt;
     private DateTime waitingSince;
@@ -30,9 +36,11 @@ public sealed unsafe class TransmutationController
     private IReadOnlyList<(MateriaDefinition Materia, uint Count)> eligibleMateria = [];
     private bool tradeWindowOpen;
     private bool active;
+    private float? mutamixDistance;
 
     public TransmutationController(
         IClientState clientState,
+        IObjectTable objectTable,
         IPluginLog log,
         MateriaCatalog catalog,
         InventoryReader inventoryReader,
@@ -40,6 +48,7 @@ public sealed unsafe class TransmutationController
         TextAdvanceIpc textAdvance)
     {
         this.clientState = clientState;
+        this.objectTable = objectTable;
         this.log = log;
         this.catalog = catalog;
         this.inventoryReader = inventoryReader;
@@ -57,6 +66,10 @@ public sealed unsafe class TransmutationController
 
     public bool TradeWindowOpen => tradeWindowOpen;
 
+    public float? MutamixDistance => mutamixDistance;
+
+    public bool MutamixNearby => mutamixDistance is <= MutamixInteractionRange;
+
     public bool TextAdvanceEnabled { get; private set; }
 
     public int CompletedTransmutations { get; private set; }
@@ -73,6 +86,10 @@ public sealed unsafe class TransmutationController
                 return "A run is already active.";
             if (!clientState.IsLoggedIn)
                 return "Log in before starting.";
+            if (!MutamixNearby)
+                return mutamixDistance is { } distance
+                    ? $"Move within {MutamixInteractionRange:0} yalms of Mutamix (currently {distance:0.0})."
+                    : $"Mutamix was not found nearby. Stand within {MutamixInteractionRange:0} yalms before starting.";
             if (!tradeWindowOpen)
                 return "Open Mutamix's Materia Transmutation window first.";
             if (!TextAdvanceEnabled)
@@ -107,8 +124,20 @@ public sealed unsafe class TransmutationController
             if (active)
                 Stop("Stopped because the character logged out.");
             Inventory = InventorySnapshot.Unavailable("Log in to scan player inventory.");
+            mutamixDistance = null;
             RefreshEligibility();
             return;
+        }
+
+        if (now >= mutamixProximityRefreshAt)
+        {
+            mutamixProximityRefreshAt = now + MutamixProximityRefreshInterval;
+            RefreshMutamixProximity();
+            if (active && !MutamixNearby)
+            {
+                Stop("Stopped because you moved outside Mutamix's 5-yalm range.");
+                return;
+            }
         }
 
         if (now >= textAdvanceProbeAt)
@@ -174,6 +203,7 @@ public sealed unsafe class TransmutationController
 
     public bool Start()
     {
+        RefreshMutamixProximity();
         TextAdvanceEnabled = textAdvance.IsAvailableAndEnabled();
         Inventory = inventoryReader.Capture();
         RefreshEligibility();
@@ -429,6 +459,29 @@ public sealed unsafe class TransmutationController
             .Select(item => (Materia: item, Count: counts.GetValueOrDefault(item.ItemId)))
             .Where(pair => pair.Count > 0)
             .ToArray();
+    }
+
+    private void RefreshMutamixProximity()
+    {
+        mutamixDistance = null;
+        if (!clientState.IsLoggedIn || objectTable[0] is not { } player)
+            return;
+
+        var closestDistanceSquared = float.PositiveInfinity;
+        foreach (var gameObject in objectTable)
+        {
+            if (gameObject is null ||
+                gameObject.ObjectKind is not (ObjectKind.EventNpc or ObjectKind.BattleNpc) ||
+                !gameObject.Name.TextValue.Contains("Mutamix", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var distanceSquared = Vector3.DistanceSquared(player.Position, gameObject.Position);
+            if (distanceSquared < closestDistanceSquared)
+                closestDistanceSquared = distanceSquared;
+        }
+
+        if (float.IsFinite(closestDistanceSquared))
+            mutamixDistance = MathF.Sqrt(closestDistanceSquared);
     }
 
     private bool IsEligible(MateriaDefinition materia)

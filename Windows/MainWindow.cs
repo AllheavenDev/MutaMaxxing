@@ -57,15 +57,31 @@ public sealed class MainWindow : Window, IDisposable
             : "Open Mutamix's Materia Transmutation window before starting.");
         ImGui.SameLine();
         ImGui.TextDisabled(controller.TextAdvanceEnabled ? "TextAdvance ready" : "TextAdvance required");
+        if (controller.MutamixDistance is { } mutamixDistance)
+        {
+            ImGui.TextDisabled(controller.MutamixNearby
+                ? $"Mutamix nearby ({mutamixDistance:0.0} yalms)."
+                : $"Mutamix is {mutamixDistance:0.0} yalms away; move within {TransmutationController.MutamixInteractionRange:0} yalms to start.");
+        }
+        else
+        {
+            ImGui.TextDisabled($"Mutamix not found nearby; stand within {TransmutationController.MutamixInteractionRange:0} yalms to start.");
+        }
 
         if (controller.IsRunning)
         {
             if (ImGui.Button("Stop run"))
                 controller.StopByUser();
         }
-        else if (ImGui.Button("Start run"))
+        else
         {
-            controller.Start();
+            var canStart = controller.CanStart(out var startBlockReason);
+            ImGui.BeginDisabled(!canStart);
+            if (ImGui.Button("Start run"))
+                controller.Start();
+            ImGui.EndDisabled();
+            if (!canStart)
+                ImGui.TextDisabled(startBlockReason);
         }
 
         ImGui.SameLine();

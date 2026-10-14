@@ -30,6 +30,9 @@ public sealed class Plugin : IDalamudPlugin
     internal static IClientState ClientState { get; private set; } = null!;
 
     [PluginService]
+    internal static IObjectTable ObjectTable { get; private set; } = null!;
+
+    [PluginService]
     internal static IFramework Framework { get; private set; } = null!;
 
     [PluginService]
@@ -53,7 +56,7 @@ public sealed class Plugin : IDalamudPlugin
         catalog = new MateriaCatalog(DataManager);
         var inventoryReader = new InventoryReader();
         var textAdvance = new TextAdvanceIpc(PluginInterface);
-        controller = new TransmutationController(ClientState, Log, catalog, inventoryReader, config, textAdvance);
+        controller = new TransmutationController(ClientState, ObjectTable, Log, catalog, inventoryReader, config, textAdvance);
         mainWindow = new MainWindow(catalog, config, controller, () => PluginInterface.SavePluginConfig(config));
 
         windowSystem.AddWindow(mainWindow);
