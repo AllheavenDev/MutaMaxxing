@@ -1,0 +1,13 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>Shikaare</Authors>
+    <Description>Preview and batch transmute selected materia with Mutamix.</Description>
+    <AssemblyName>MutaMaxxing</AssemblyName>
+    <RootNamespace>MutaMaxxing</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>false</IsPackable>
+    <TargetPlatformMoniker>Windows,Version=7.0</TargetPlatformMoniker>
+    <TargetPlatformDisplayName>Windows</TargetPlatformDisplayName>
+  </PropertyGroup>
+</Project>

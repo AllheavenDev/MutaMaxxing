@@ -1,0 +1,6 @@
+**/bin/
+**/obj/
+.dotnet-home/
+*.user
+*.suo
+local-plugin/

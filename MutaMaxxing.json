@@ -1,0 +1,19 @@
+{
+  "Author": "Shikaare",
+  "Name": "MutaMaxxing",
+  "InternalName": "MutaMaxxing",
+  "AssemblyVersion": "0.1.0.0",
+  "Description": "Preview and batch transmute selected materia with Mutamix.",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "Materia",
+    "Utility"
+  ],
+  "DalamudApiLevel": 15,
+  "LoadRequiredState": 0,
+  "LoadSync": false,
+  "CanUnloadAsync": false,
+  "LoadPriority": 0,
+  "Punchline": "Batch materia transmutation with clear inventory filters.",
+  "AcceptsFeedback": true
+}
