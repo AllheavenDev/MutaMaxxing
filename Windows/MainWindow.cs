@@ -155,12 +155,12 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.TextDisabled("Every trade uses one grade only. When enabled, all five inputs must also be different materia types.");
 
         var randomizeInterTradeDelay = config.RandomizeInterTradeDelay;
-        if (ImGui.Checkbox("Add randomized delay between trades (20–40 ms)", ref randomizeInterTradeDelay))
+        if (ImGui.Checkbox("Add randomized delay between trades (50–70 ms)", ref randomizeInterTradeDelay))
         {
             config.RandomizeInterTradeDelay = randomizeInterTradeDelay;
             SaveConfiguration();
         }
-        ImGui.TextDisabled("Adds a random 20–40 ms pause after each completed trade (average 30 ms).");
+        ImGui.TextDisabled("Adds a random 50–70 ms pause after each completed trade (average 60 ms).");
 
         if (!tradeAll)
         {

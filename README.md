@@ -18,7 +18,8 @@ An experimental Dalamud plugin that previews eligible materia in the player's fo
 - Blacklist rules always take precedence. The rule matrix supports Battle, Crafter, Gatherer, and Other; “Any tier” also covers future grades.
 - Every batch uses materia from one grade only; grades are never mixed, even when the distinct-materia option is off. The controller picks a grade that has enough eligible inputs for a complete trade.
 - Optional **Require five different materia of one grade** mode selects one materia from each of five distinct item types at the same grade. A type can be used in later trades.
-- Optional **Add randomized delay between trades (20–40 ms)** adds a random pause averaging 30 ms after each completed trade, on top of the existing completion wait.
+- MutaMaxxing adds a random 5–10 ms micro-delay between materia selection requests and waits 10 ms before confirming each batch.
+- Optional **Add randomized delay between trades (50–70 ms)** adds a random pause averaging 60 ms after each completed trade, on top of the existing completion wait.
 - `/mutamaxxing` opens the menu for selecting eligible materia and starting a run. The Start button is enabled only when Mutamix is within 5 yalms, the `TradeMultiple` window is open, TextAdvance is enabled and responding, and the game window has no materia already selected. Moving out of range during a run stops the next trade.
 - Each exchange uses five inputs. MutaMaxxing waits for those inputs to leave inventory before choosing another batch. A timeout stops the run without retrying a possibly submitted exchange.
 - Use the **Stop run** button or `/mutamaxxing stop`. A submitted in-game exchange may finish after Stop; no later exchange will be submitted.

@@ -12,6 +12,7 @@ public sealed unsafe class TransmutationController
     private static readonly TimeSpan InventoryRefreshInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MutamixProximityRefreshInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan SelectionInterval = TimeSpan.FromMilliseconds(150);
+    private static readonly TimeSpan ConfirmationDelay = TimeSpan.FromMilliseconds(10);
     private static readonly TimeSpan SelectionTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan TransactionTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan TextAdvanceProbeInterval = TimeSpan.FromSeconds(2);
@@ -36,6 +37,7 @@ public sealed unsafe class TransmutationController
     private IReadOnlyList<(MateriaDefinition Materia, uint Count)> eligibleMateria = [];
     private bool tradeWindowOpen;
     private bool active;
+    private bool confirmationDelayAppliedForBatch;
     private float? mutamixDistance;
 
     public TransmutationController(
@@ -231,6 +233,7 @@ public sealed unsafe class TransmutationController
         selectedMateria.Clear();
         pendingSelection = null;
         transactionBaseline.Clear();
+        confirmationDelayAppliedForBatch = false;
         CompletedTransmutations = 0;
         active = true;
         nextActionAt = DateTime.UtcNow;
@@ -284,6 +287,15 @@ public sealed unsafe class TransmutationController
 
         if (selectedCount == 5)
         {
+            if (!confirmationDelayAppliedForBatch)
+            {
+                confirmationDelayAppliedForBatch = true;
+                nextActionAt = now + ConfirmationDelay;
+                Status = "Five materia selected. Waiting briefly before confirmation.";
+                return;
+            }
+
+            confirmationDelayAppliedForBatch = false;
             SubmitTrade(agent, now);
             return;
         }
@@ -321,7 +333,8 @@ public sealed unsafe class TransmutationController
             agent->AddItemQuantity(slot, (uint)quantity);
             var expected = before + quantity;
             pendingSelection = new PendingSelection(candidate.ItemId, (uint)quantity, candidate.Container, candidate.Slot, expected, now);
-            nextActionAt = now + SelectionInterval;
+            var microDelay = TimeSpan.FromMilliseconds(Random.Shared.Next(5, 11));
+            nextActionAt = now + SelectionInterval + microDelay;
         }
         catch (Exception exception)
         {
@@ -467,10 +480,11 @@ public sealed unsafe class TransmutationController
             CompletedTransmutations++;
             selectedMateria.Clear();
             pendingSelection = null;
+            confirmationDelayAppliedForBatch = false;
             transactionBaseline.Clear();
             Status = $"Trade {CompletedTransmutations} complete. Checking for the next eligible batch.";
             var interTradeDelay = config.RandomizeInterTradeDelay
-                ? TimeSpan.FromMilliseconds(Random.Shared.Next(20, 41))
+                ? TimeSpan.FromMilliseconds(Random.Shared.Next(50, 71))
                 : TimeSpan.Zero;
             nextActionAt = now + TimeSpan.FromMilliseconds(350) + interTradeDelay;
             return;
@@ -590,6 +604,7 @@ public sealed unsafe class TransmutationController
     {
         var wasActive = active;
         active = false;
+        confirmationDelayAppliedForBatch = false;
         pendingSelection = null;
         selectedMateria.Clear();
         transactionBaseline.Clear();
