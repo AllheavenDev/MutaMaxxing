@@ -151,10 +151,12 @@ public sealed class MainWindow : Window, IDisposable
         }
         else
         {
-            var routeBlockReason = routeController.StartBlockReason;
+            var routeBlockReason = controller.IsRunning
+                ? "Stop the active transmutation run before routing."
+                : routeController.StartBlockReason;
             var canRoute = routeBlockReason.Length == 0;
             ImGui.BeginDisabled(!canRoute);
-            if (ImGui.Button("Walk to Mutamix"))
+            if (ImGui.Button("Fly to Mutamix"))
                 routeController.Start();
             ImGui.EndDisabled();
             if (!canRoute)
@@ -172,6 +174,11 @@ public sealed class MainWindow : Window, IDisposable
         else
         {
             var canStart = controller.CanStart(out var startBlockReason);
+            if (routeController.IsActive)
+            {
+                canStart = false;
+                startBlockReason = "Stop the route before starting a transmutation run.";
+            }
             ImGui.BeginDisabled(!canStart);
             if (ImGui.Button("Start run", new Vector2(-1, 0)))
                 controller.Start();

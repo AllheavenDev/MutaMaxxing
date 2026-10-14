@@ -1,30 +1,52 @@
 using Dalamud.Game;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
+using Dalamud.Game.Text.SeStringHandling;
+using Dalamud.Memory;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
+using FFXIVClientStructs.FFXIV.Client.Game;
+using FFXIVClientStructs.FFXIV.Client.Game.Control;
+using FFXIVClientStructs.FFXIV.Client.Game.Object;
+using FFXIVClientStructs.FFXIV.Client.UI;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
 using System.Numerics;
+using GameActionType = FFXIVClientStructs.FFXIV.Client.Game.ActionType;
+using DalamudObjectKind = Dalamud.Game.ClientState.Objects.Enums.ObjectKind;
+using LuminaAetheryte = Lumina.Excel.Sheets.Aetheryte;
 
 namespace MutaMaxxing.Services;
 
-public sealed class MutamixRouteController
+public sealed unsafe class MutamixRouteController
 {
     private const string CentralThanalanName = "Central Thanalan";
     private const float MutamixMapX = 23.7f;
     private const float MutamixMapY = 13.6f;
     private const float DestinationFloorSearchRadius = 5f;
-    private const float ArrivalDistance = 7f;
+    private const float ArrivalDistance = 4f;
+    private const float InteractionDistance = 5f;
+    private const uint MountRouletteGeneralAction = 9;
+    private const uint DismountGeneralAction = 23;
     private static readonly TimeSpan TerritoryTimeout = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan NavmeshTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan PathTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan MountTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan DialogueTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan TradeWindowTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan PathProbeInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan DependencyProbeInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan ActionRetryInterval = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan PostDismountDelay = TimeSpan.FromMilliseconds(750);
 
     private readonly IClientState clientState;
     private readonly IObjectTable objectTable;
+    private readonly ICondition condition;
+    private readonly IGameGui gameGui;
+    private readonly TransmutationController transmutationController;
     private readonly IPluginLog log;
     private readonly uint centralThanalanTerritoryId;
     private readonly uint centralThanalanAetheryteId;
@@ -45,7 +67,9 @@ public sealed class MutamixRouteController
     private DateTime stateStartedAt;
     private DateTime nextPathProbeAt;
     private DateTime nextDependencyProbeAt;
+    private DateTime nextActionAt;
     private bool pathWasObserved;
+    private int actionAttempts;
     private Vector3 destination;
     private bool? vnavmeshReady;
     private bool lifestreamAvailable;
@@ -56,17 +80,23 @@ public sealed class MutamixRouteController
         IDalamudPluginInterface pluginInterface,
         IClientState clientState,
         IObjectTable objectTable,
+        ICondition condition,
+        IGameGui gameGui,
+        TransmutationController transmutationController,
         IPluginLog log)
     {
         this.clientState = clientState;
         this.objectTable = objectTable;
+        this.condition = condition;
+        this.gameGui = gameGui;
+        this.transmutationController = transmutationController;
         this.log = log;
 
         var territorySheet = dataManager.GetExcelSheet<TerritoryType>(ClientLanguage.English);
         centralThanalanTerritoryId = territorySheet
             .FirstOrDefault(row => row.PlaceName.ValueNullable?.Name.ExtractText() == CentralThanalanName)
             .RowId;
-        centralThanalanAetheryteId = dataManager.GetExcelSheet<Aetheryte>()
+        centralThanalanAetheryteId = dataManager.GetExcelSheet<LuminaAetheryte>()
             .Where(row => row.IsAetheryte && row.Territory.RowId == centralThanalanTerritoryId)
             .Select(row => row.RowId)
             .FirstOrDefault();
@@ -107,8 +137,12 @@ public sealed class MutamixRouteController
         {
             if (IsActive)
                 return "A route is already active.";
+            if (transmutationController.IsRunning)
+                return "Stop the active transmutation run before routing.";
             if (!clientState.IsLoggedIn)
                 return "Log in before starting a route.";
+            if (condition[ConditionFlag.RidingPillion])
+                return "Leave the passenger seat before starting a route.";
             if (centralThanalanTerritoryId == 0 || centralThanalanAetheryteId == 0 || mutamixMapPosition is null)
                 return status;
             if (vnavmeshReady != true)
@@ -241,13 +275,78 @@ public sealed class MutamixRouteController
 
                 destination = resolvedDestination;
                 log.Information("MutaMaxxing route resolved destination {Destination} from {Source}; territory {TerritoryId}, vnavmesh ready={NavmeshReady}", destination, destinationSource, clientState.TerritoryType, vnavmeshReady);
-                BeginWalk(destination);
+                BeginMounting(now);
+                break;
+
+            case RouteState.Mounting:
+                UpdateMounting(now);
                 break;
 
             case RouteState.Walking:
                 UpdateWalking(now);
                 break;
+
+            case RouteState.Dismounting:
+                UpdateDismounting(now);
+                break;
+
+            case RouteState.WaitingForDialogue:
+                UpdateWaitingForDialogue(now);
+                break;
+
+            case RouteState.WaitingForTradeWindow:
+                UpdateWaitingForTradeWindow(now);
+                break;
         }
+    }
+
+    private void BeginMounting(DateTime now)
+    {
+        SetState(RouteState.Mounting, IsMounted() ? "Waiting for the mount to be ready." : "Using Mount Roulette before flying to Mutamix.");
+        stateStartedAt = now;
+        nextActionAt = now;
+        actionAttempts = 0;
+        if (IsMounted() || IsMountTransition())
+            nextActionAt = now + ActionRetryInterval;
+        else
+            TryMount(now);
+    }
+
+    private void UpdateMounting(DateTime now)
+    {
+        if (now - stateStartedAt > MountTimeout)
+        {
+            Stop("Mount Roulette did not mount you. Check that you can mount here and try again.");
+            return;
+        }
+
+        if (IsMounted())
+        {
+            if (IsMountTransition())
+                return;
+
+            BeginWalk(destination);
+            return;
+        }
+
+        if (IsMountTransition() || now < nextActionAt)
+            return;
+
+        if (actionAttempts >= 3)
+        {
+            Stop("Mount Roulette did not mount you. Check that you can mount here and try again.");
+            return;
+        }
+
+        TryMount(now);
+    }
+
+    private void TryMount(DateTime now)
+    {
+        actionAttempts++;
+        if (!TryUseGeneralAction(MountRouletteGeneralAction))
+            log.Warning("MutaMaxxing could not use Mount Roulette on attempt {Attempt}", actionAttempts);
+        nextActionAt = now + ActionRetryInterval;
     }
 
     private void UpdateWalking(DateTime now)
@@ -276,7 +375,7 @@ public sealed class MutamixRouteController
 
         if (IsWithinArrivalDistance(destination))
         {
-            Stop("Route complete. Open Mutamix's Materia Transmutation window when you're ready.");
+            BeginDismounting(now);
             return;
         }
 
@@ -286,11 +385,172 @@ public sealed class MutamixRouteController
             Stop("vnavmesh accepted the route but did not start moving.", stopNavigation: true);
     }
 
+    private void BeginDismounting(DateTime now)
+    {
+        SetState(RouteState.Dismounting, "Arrived at Mutamix. Dismounting before interaction.");
+        stateStartedAt = now;
+        nextActionAt = now + PostDismountDelay;
+        actionAttempts = 0;
+    }
+
+    private void UpdateDismounting(DateTime now)
+    {
+        if (now - stateStartedAt > MountTimeout)
+        {
+            Stop("Could not dismount near Mutamix. Dismount manually and start the route again.");
+            return;
+        }
+
+        if (IsMountTransition())
+            return;
+
+        if (IsMounted())
+        {
+            if (now < nextActionAt)
+                return;
+
+            if (actionAttempts >= 3)
+            {
+                Stop("Could not dismount near Mutamix. Dismount manually and start the route again.");
+                return;
+            }
+
+            actionAttempts++;
+            if (!TryUseGeneralAction(DismountGeneralAction))
+                log.Warning("MutaMaxxing could not use Dismount near Mutamix on attempt {Attempt}", actionAttempts);
+            nextActionAt = now + ActionRetryInterval;
+            return;
+        }
+
+        if (now < nextActionAt)
+            return;
+
+        BeginInteraction(now);
+    }
+
+    private void BeginInteraction(DateTime now)
+    {
+        var mutamix = FindMutamix();
+        if (mutamix is null)
+        {
+            Stop("Arrived at Mutamix's location, but could not identify him to interact. Open the transmutation window manually.");
+            return;
+        }
+
+        if (objectTable.LocalPlayer is not { } localPlayer || Vector3.Distance(localPlayer.Position, mutamix.Position) > InteractionDistance)
+        {
+            Stop("Arrived near Mutamix, but not within interaction range. Move closer and open the transmutation window manually.");
+            return;
+        }
+
+        try
+        {
+            var targetSystem = TargetSystem.Instance();
+            if (targetSystem == null)
+            {
+                Stop("The game interaction system is unavailable. Open Mutamix's transmutation window manually.");
+                return;
+            }
+
+            targetSystem->InteractWithObject((GameObject*)mutamix.Address, true);
+            SetState(RouteState.WaitingForDialogue, "Interacting with Mutamix and waiting for the Materia Transmutation option.");
+            stateStartedAt = now;
+        }
+        catch (Exception exception)
+        {
+            log.Error(exception, "MutaMaxxing could not interact with Mutamix");
+            Stop("Could not interact with Mutamix. Open the transmutation window manually.");
+        }
+    }
+
+    private void UpdateWaitingForDialogue(DateTime now)
+    {
+        if (IsAddonVisible("TradeMultiple"))
+        {
+            Stop("Mutamix's Materia Transmutation window is open. Configure your run and press Start.");
+            return;
+        }
+
+        if (now - stateStartedAt > DialogueTimeout)
+        {
+            Stop("Mutamix's transmutation option did not appear. Check TextAdvance and open the window manually.");
+            return;
+        }
+
+        if (!TryGetSelectString(out var addon))
+            return;
+
+        var entryCount = addon->PopupMenu.PopupMenu.EntryCount;
+        var matchingIndex = -1;
+        for (var index = 0; index < entryCount; index++)
+        {
+            var entryName = addon->PopupMenu.PopupMenu.EntryNames[index].Value;
+            if (entryName == null)
+                continue;
+
+            var entryText = MemoryHelper.ReadSeStringNullTerminated((nint)entryName).TextValue;
+            if (entryText.Contains("Materia", StringComparison.OrdinalIgnoreCase) &&
+                entryText.Contains("Transmutation", StringComparison.OrdinalIgnoreCase))
+            {
+                matchingIndex = index;
+                break;
+            }
+        }
+
+        if (matchingIndex < 0)
+        {
+            Stop("Mutamix's menu is open, but MutaMaxxing could not identify the Materia Transmutation option. Select it manually.");
+            return;
+        }
+
+        var callbackValues = stackalloc AtkValue[1];
+        callbackValues[0].Type = AtkValueType.Int;
+        callbackValues[0].Int = matchingIndex;
+        ((AtkUnitBase*)addon)->FireCallback(1, callbackValues, true);
+
+        log.Information("MutaMaxxing selected Mutamix's Materia Transmutation menu entry {EntryIndex}", matchingIndex);
+        SetState(RouteState.WaitingForTradeWindow, "Selected Materia Transmutation. Waiting for the transmutation window.");
+        stateStartedAt = now;
+    }
+
+    private void UpdateWaitingForTradeWindow(DateTime now)
+    {
+        if (IsAddonVisible("TradeMultiple"))
+        {
+            Stop("Mutamix's Materia Transmutation window is open. Configure your run and press Start.");
+            return;
+        }
+
+        if (now - stateStartedAt > TradeWindowTimeout)
+            Stop("Selected Materia Transmutation, but the game window did not open. Open it manually and start your run.");
+    }
+
+    private bool TryGetSelectString(out AddonSelectString* addon)
+    {
+        var addonPointer = gameGui.GetAddonByName("SelectString");
+        if (addonPointer.Address == 0)
+        {
+            addon = null;
+            return false;
+        }
+
+        addon = (AddonSelectString*)addonPointer.Address;
+        var baseAddon = (AtkUnitBase*)addon;
+        return baseAddon->IsVisible && baseAddon->IsReady &&
+               addon->PopupMenu.PopupMenu.EntryCount > 0 && addon->PopupMenu.PopupMenu.EntryNames != null;
+    }
+
+    private bool IsAddonVisible(string addonName)
+    {
+        var addonPointer = gameGui.GetAddonByName(addonName);
+        return addonPointer.Address != 0 && ((AtkUnitBase*)addonPointer.Address)->IsVisible;
+    }
+
     private bool BeginWalk(Vector3 target)
     {
         try
         {
-            if (!pathfindAndMoveTo.InvokeFunc(target, false))
+            if (!pathfindAndMoveTo.InvokeFunc(target, true))
             {
                 Stop("vnavmesh rejected the route to Mutamix.");
                 return false;
@@ -303,7 +563,7 @@ public sealed class MutamixRouteController
             return false;
         }
 
-        SetState(RouteState.Walking, "vnavmesh is walking to Mutamix.");
+        SetState(RouteState.Walking, "vnavmesh is flying to Mutamix.");
         stateStartedAt = DateTime.UtcNow;
         nextPathProbeAt = stateStartedAt + TimeSpan.FromSeconds(1);
         pathWasObserved = false;
@@ -414,7 +674,7 @@ public sealed class MutamixRouteController
         foreach (var gameObject in objectTable)
         {
             if (gameObject is not null &&
-                gameObject.ObjectKind is ObjectKind.EventNpc or ObjectKind.BattleNpc &&
+                gameObject.ObjectKind is DalamudObjectKind.EventNpc or DalamudObjectKind.BattleNpc &&
                 gameObject.Name.TextValue.Contains("Mutamix", StringComparison.OrdinalIgnoreCase))
                 return gameObject;
         }
@@ -468,6 +728,30 @@ public sealed class MutamixRouteController
     }
 
     private bool IsNavigationIdle() => ReadPathState(pathfindInProgress) == false && ReadPathState(pathIsRunning) == false;
+
+    private bool IsMounted() => condition[ConditionFlag.Mounted];
+
+    private bool IsMountTransition() =>
+        condition[ConditionFlag.Mounting] ||
+        condition[ConditionFlag.Mounting71] ||
+        condition[ConditionFlag.MountOrOrnamentTransition];
+
+    private unsafe bool TryUseGeneralAction(uint actionId)
+    {
+        try
+        {
+            var actionManager = ActionManager.Instance();
+            if (actionManager == null || actionManager->GetActionStatus(GameActionType.GeneralAction, actionId) != 0)
+                return false;
+
+            return actionManager->UseAction(GameActionType.GeneralAction, actionId);
+        }
+        catch (Exception exception)
+        {
+            log.Error(exception, "MutaMaxxing could not use general action {ActionId}", actionId);
+            return false;
+        }
+    }
 
     private bool IsWithinArrivalDistance(Vector3 target) => objectTable.LocalPlayer is { } localPlayer &&
         Vector3.Distance(localPlayer.Position, target) <= ArrivalDistance;
@@ -533,6 +817,10 @@ public sealed class MutamixRouteController
         Idle,
         WaitingForTerritory,
         WaitingForVnavmesh,
+        Mounting,
         Walking,
+        Dismounting,
+        WaitingForDialogue,
+        WaitingForTradeWindow,
     }
 }

@@ -1,5 +1,6 @@
 using Dalamud.Game.Addon.Lifecycle;
 using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.Command;
 using Dalamud.IoC;
 using Dalamud.Interface.Windowing;
@@ -34,6 +35,12 @@ public sealed class Plugin : IDalamudPlugin
     internal static IObjectTable ObjectTable { get; private set; } = null!;
 
     [PluginService]
+    internal static ICondition Condition { get; private set; } = null!;
+
+    [PluginService]
+    internal static IGameGui GameGui { get; private set; } = null!;
+
+    [PluginService]
     internal static IFramework Framework { get; private set; } = null!;
 
     [PluginService]
@@ -58,7 +65,7 @@ public sealed class Plugin : IDalamudPlugin
         var inventoryReader = new InventoryReader();
         var textAdvance = new TextAdvanceIpc(PluginInterface);
         controller = new TransmutationController(ClientState, ObjectTable, Log, catalog, inventoryReader, config, textAdvance);
-        routeController = new MutamixRouteController(DataManager, PluginInterface, ClientState, ObjectTable, Log);
+        routeController = new MutamixRouteController(DataManager, PluginInterface, ClientState, ObjectTable, Condition, GameGui, controller, Log);
         mainWindow = new MainWindow(catalog, config, controller, routeController, () => PluginInterface.SavePluginConfig(config));
 
         windowSystem.AddWindow(mainWindow);

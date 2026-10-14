@@ -1,6 +1,7 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
     <Version>0.1.0</Version>
+    <Author>Shikaare</Author>
     <Authors>Shikaare</Authors>
     <Description>Preview and batch transmute selected materia with Mutamix.</Description>
     <AssemblyName>MutaMaxxing</AssemblyName>
