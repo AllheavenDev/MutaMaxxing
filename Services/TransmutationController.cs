@@ -78,6 +78,10 @@ public sealed unsafe class TransmutationController
 
     public uint EligibleItemCount => EligibleMateria.Aggregate(0u, (sum, item) => sum + item.Count);
 
+    public int EligibleTierCount => EligibleMateria
+        .GroupBy(item => item.Materia.Tier)
+        .Count(CanCompleteTrade);
+
     public string StartBlockReason
     {
         get
@@ -96,10 +100,12 @@ public sealed unsafe class TransmutationController
                 return "TextAdvance must be installed, enabled, and responding to IPC.";
             if (!Inventory.IsReady)
                 return Inventory.Message;
-            if (config.RequireFiveDifferentMateria && EligibleMateria.Count < 5)
-                return $"Only {EligibleMateria.Count} distinct eligible materia types found; five are needed for this option.";
             if (EligibleItemCount < 5)
                 return $"Only {EligibleItemCount} eligible materia found; at least five are needed.";
+            if (EligibleTierCount == 0)
+                return config.RequireFiveDifferentMateria
+                    ? "No single materia grade has five distinct eligible types. A trade cannot mix grades."
+                    : "No single materia grade has five eligible materia. A trade cannot mix grades.";
 
             var agent = AgentTradeMultiple.Instance();
             if (agent == null)
@@ -286,8 +292,8 @@ public sealed unsafe class TransmutationController
         if (candidate is null)
         {
             Stop(config.RequireFiveDifferentMateria
-                ? "Stopped because fewer than five distinct eligible materia types remain for this trade. Clear the partial selection in Mutamix before restarting."
-                : $"Stopped with {EligibleItemCount} eligible materia remaining; fewer than five can be selected safely.");
+                ? "Stopped because no single grade has five distinct eligible materia types for this trade. Clear any partial selection in Mutamix before restarting."
+                : "Stopped because no single grade has five eligible materia for this trade. Clear any partial selection in Mutamix before restarting.");
             return;
         }
 
@@ -326,6 +332,10 @@ public sealed unsafe class TransmutationController
 
     private InventoryStack? FindNextStack(AgentTradeMultiple* agent)
     {
+        var batchTier = GetBatchTier();
+        if (batchTier is null)
+            return null;
+
         var selectedSlots = selectedMateria.Select(x => (x.Container, x.Slot)).ToHashSet();
         var selectedItemIds = selectedMateria.Select(x => x.ItemId).ToHashSet();
         if (pendingSelection is { } pending)
@@ -341,6 +351,9 @@ public sealed unsafe class TransmutationController
         foreach (var stack in Inventory.Stacks)
         {
             if (stack.Quantity == 0 || !catalog.TryGet(stack.ItemId, out var definition) || !IsEligible(definition))
+                continue;
+
+            if (definition.Tier != batchTier.Value)
                 continue;
 
             if (config.RequireFiveDifferentMateria && selectedItemIds.Contains(stack.ItemId))
@@ -372,6 +385,12 @@ public sealed unsafe class TransmutationController
             (selectedMateria.Any(x => x.Quantity != 1) || selectedMateria.Select(x => x.ItemId).Distinct().Count() != 5))
         {
             Stop("Stopped because the selected batch did not contain five different materia types.");
+            return;
+        }
+
+        if (!SelectedMateriaShareTier())
+        {
+            Stop("Stopped because the selected batch contained more than one materia grade.");
             return;
         }
 
@@ -450,7 +469,10 @@ public sealed unsafe class TransmutationController
             pendingSelection = null;
             transactionBaseline.Clear();
             Status = $"Trade {CompletedTransmutations} complete. Checking for the next eligible batch.";
-            nextActionAt = now + TimeSpan.FromMilliseconds(350);
+            var interTradeDelay = config.RandomizeInterTradeDelay
+                ? TimeSpan.FromMilliseconds(Random.Shared.Next(20, 41))
+                : TimeSpan.Zero;
+            nextActionAt = now + TimeSpan.FromMilliseconds(350) + interTradeDelay;
             return;
         }
 
@@ -479,6 +501,52 @@ public sealed unsafe class TransmutationController
             .Select(item => (Materia: item, Count: counts.GetValueOrDefault(item.ItemId)))
             .Where(pair => pair.Count > 0)
             .ToArray();
+    }
+
+    private bool CanCompleteTrade(IGrouping<int, (MateriaDefinition Materia, uint Count)> tierGroup) =>
+        config.RequireFiveDifferentMateria
+            ? tierGroup.Select(item => item.Materia.ItemId).Distinct().Take(5).Count() == 5
+            : tierGroup.Sum(item => (long)item.Count) >= 5;
+
+    private int? GetBatchTier()
+    {
+        if (selectedMateria.Count > 0 && catalog.TryGet(selectedMateria[0].ItemId, out var selectedDefinition))
+            return selectedDefinition.Tier;
+
+        if (pendingSelection is { } pending && catalog.TryGet(pending.ItemId, out var pendingDefinition))
+            return pendingDefinition.Tier;
+
+        return EligibleMateria
+            .GroupBy(item => item.Materia.Tier)
+            .Where(CanCompleteTrade)
+            .Select(group => new
+            {
+                Tier = group.Key,
+                ItemCount = group.Sum(item => (long)item.Count),
+                DistinctTypeCount = group.Select(item => item.Materia.ItemId).Distinct().Count(),
+            })
+            .OrderByDescending(group => config.RequireFiveDifferentMateria ? group.DistinctTypeCount : group.ItemCount)
+            .ThenByDescending(group => group.ItemCount)
+            .ThenByDescending(group => group.Tier)
+            .Select(group => (int?)group.Tier)
+            .FirstOrDefault();
+    }
+
+    private bool SelectedMateriaShareTier()
+    {
+        int? selectedTier = null;
+        foreach (var selected in selectedMateria)
+        {
+            if (!catalog.TryGet(selected.ItemId, out var definition))
+                return false;
+
+            if (selectedTier is { } tier && tier != definition.Tier)
+                return false;
+
+            selectedTier = definition.Tier;
+        }
+
+        return selectedTier.HasValue;
     }
 
     private void RefreshMutamixProximity()

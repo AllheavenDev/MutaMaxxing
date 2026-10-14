@@ -100,9 +100,7 @@ public sealed class MainWindow : Window, IDisposable
         }
 
         var eligible = controller.EligibleMateria;
-        ImGui.Text(config.RequireFiveDifferentMateria
-            ? $"Eligible materia: {controller.EligibleItemCount}  |  Distinct types: {eligible.Count}"
-            : $"Eligible materia: {controller.EligibleItemCount}  |  Complete trades available: {controller.EligibleItemCount / 5}");
+        ImGui.Text($"Eligible materia: {controller.EligibleItemCount}  |  Grades with a complete batch: {controller.EligibleTierCount}");
         if (eligible.Count == 0)
         {
             ImGui.TextDisabled("No inventory materia currently match these rules.");
@@ -149,12 +147,20 @@ public sealed class MainWindow : Window, IDisposable
             : "Only whitelist matches are eligible. A blacklist match always wins.");
 
         var requireFiveDifferent = config.RequireFiveDifferentMateria;
-        if (ImGui.Checkbox("Require five different materia in each trade", ref requireFiveDifferent))
+        if (ImGui.Checkbox("Require five different materia of one grade", ref requireFiveDifferent))
         {
             config.RequireFiveDifferentMateria = requireFiveDifferent;
             SaveConfiguration();
         }
-        ImGui.TextDisabled("Each batch uses one of five different materia types. A type may be used again in later trades.");
+        ImGui.TextDisabled("Every trade uses one grade only. When enabled, all five inputs must also be different materia types.");
+
+        var randomizeInterTradeDelay = config.RandomizeInterTradeDelay;
+        if (ImGui.Checkbox("Add randomized delay between trades (20–40 ms)", ref randomizeInterTradeDelay))
+        {
+            config.RandomizeInterTradeDelay = randomizeInterTradeDelay;
+            SaveConfiguration();
+        }
+        ImGui.TextDisabled("Adds a random 20–40 ms pause after each completed trade (average 30 ms).");
 
         if (!tradeAll)
         {
