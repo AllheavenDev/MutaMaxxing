@@ -34,6 +34,10 @@ public sealed unsafe class TransmutationController
     private DateTime waitingSince;
     private PendingSelection? pendingSelection;
     private Dictionary<uint, uint> transactionBaseline = [];
+    private Dictionary<uint, uint> transactionMateriaBaseline = [];
+    private Dictionary<uint, uint> transactionInputQuantities = [];
+    private long transactionMateriaTotalBaseline;
+    private readonly Dictionary<uint, int> receivedMateriaCounts = [];
     private IReadOnlyList<(MateriaDefinition Materia, uint Count)> eligibleMateria = [];
     private bool tradeWindowOpen;
     private bool active;
@@ -75,6 +79,14 @@ public sealed unsafe class TransmutationController
     public bool TextAdvanceEnabled { get; private set; }
 
     public int CompletedTransmutations { get; private set; }
+
+    public IReadOnlyDictionary<uint, int> ReceivedMateriaCounts => receivedMateriaCounts;
+
+    public int UnidentifiedResultCount { get; private set; }
+
+    public bool HasRunSummary { get; private set; }
+
+    public string LastRunSummary { get; private set; } = string.Empty;
 
     public IReadOnlyList<(MateriaDefinition Materia, uint Count)> EligibleMateria => eligibleMateria;
 
@@ -232,9 +244,13 @@ public sealed unsafe class TransmutationController
 
         selectedMateria.Clear();
         pendingSelection = null;
-        transactionBaseline.Clear();
+        ClearTransactionTracking();
         confirmationDelayAppliedForBatch = false;
         CompletedTransmutations = 0;
+        receivedMateriaCounts.Clear();
+        UnidentifiedResultCount = 0;
+        HasRunSummary = false;
+        LastRunSummary = string.Empty;
         active = true;
         nextActionAt = DateTime.UtcNow;
         Status = $"Preparing a trade. {EligibleItemCount} eligible materia are in player inventory.";
@@ -303,9 +319,12 @@ public sealed unsafe class TransmutationController
         var candidate = FindNextStack(agent);
         if (candidate is null)
         {
-            Stop(config.RequireFiveDifferentMateria
-                ? "Stopped because no single grade has five distinct eligible materia types for this trade. Clear any partial selection in Mutamix before restarting."
-                : "Stopped because no single grade has five eligible materia for this trade. Clear any partial selection in Mutamix before restarting.");
+            var finished = selectedCount == 0 && selectedMateria.Count == 0 && CompletedTransmutations > 0;
+            Stop(finished
+                ? "Run complete: no complete eligible batch remains."
+                : config.RequireFiveDifferentMateria
+                    ? "Stopped because no single grade has five distinct eligible materia types for this trade. Clear any partial selection in Mutamix before restarting."
+                    : "Stopped because no single grade has five eligible materia for this trade. Clear any partial selection in Mutamix before restarting.");
             return;
         }
 
@@ -439,25 +458,31 @@ public sealed unsafe class TransmutationController
             .Select(x => x.ItemId)
             .Distinct()
             .ToDictionary(itemId => itemId, itemId => counts.GetValueOrDefault(itemId));
+        transactionMateriaBaseline = catalog.Entries
+            .ToDictionary(item => item.ItemId, item => counts.GetValueOrDefault(item.ItemId));
+        transactionInputQuantities = selectedMateria
+            .GroupBy(item => item.ItemId)
+            .ToDictionary(group => group.Key, group => group.Aggregate(0u, (sum, item) => checked(sum + item.Quantity)));
+        transactionMateriaTotalBaseline = transactionMateriaBaseline.Values.Aggregate(0L, (sum, count) => sum + count);
 
         try
         {
             if (!agent->Confirm())
             {
-                transactionBaseline.Clear();
+                ClearTransactionTracking();
                 Stop("Stopped because the game rejected the transmutation confirmation.");
                 return;
             }
 
             waitingSince = now;
             nextActionAt = now + InventoryRefreshInterval;
-            Status = "Trade submitted. Waiting for the five selected materia to leave inventory.";
+            Status = "Trade submitted. Waiting for inventory to confirm the exchange.";
             log.Information("MutaMaxxing submitted transmutation {TradeNumber}.", CompletedTransmutations + 1);
         }
         catch (Exception exception)
         {
             log.Error(exception, "MutaMaxxing could not submit a transmutation.");
-            transactionBaseline.Clear();
+            ClearTransactionTracking();
             Stop("Stopped because the game rejected the transmutation request.");
         }
     }
@@ -469,20 +494,26 @@ public sealed unsafe class TransmutationController
         foreach (var pair in transactionBaseline)
             removedCount += (long)pair.Value - currentCounts.GetValueOrDefault(pair.Key);
 
+        var currentMateriaTotal = catalog.Entries.Aggregate(0L, (sum, item) => sum + currentCounts.GetValueOrDefault(item.ItemId));
+        var materiaTotalRemoved = transactionMateriaTotalBaseline - currentMateriaTotal;
+
         if (removedCount > 5)
         {
             Stop("Stopped because inventory changed by more than the submitted five-item trade.");
             return;
         }
 
-        if (removedCount == 5 && selectedCount == 0)
+        if (materiaTotalRemoved == 4 && selectedCount == 0 && removedCount is 4 or 5)
         {
+            RecordReceivedMateria(currentCounts);
             CompletedTransmutations++;
             selectedMateria.Clear();
             pendingSelection = null;
             confirmationDelayAppliedForBatch = false;
-            transactionBaseline.Clear();
-            Status = $"Trade {CompletedTransmutations} complete. Checking for the next eligible batch.";
+            ClearTransactionTracking();
+            Status = UnidentifiedResultCount == 0
+                ? $"Trade {CompletedTransmutations} complete. Checking for the next eligible batch."
+                : $"Trade {CompletedTransmutations} complete. One or more results could not be identified; checking for the next eligible batch.";
             var interTradeDelay = config.RandomizeInterTradeDelay
                 ? TimeSpan.FromMilliseconds(Random.Shared.Next(50, 71))
                 : TimeSpan.Zero;
@@ -497,6 +528,37 @@ public sealed unsafe class TransmutationController
         }
 
         nextActionAt = now + InventoryRefreshInterval;
+    }
+
+    private void RecordReceivedMateria(IReadOnlyDictionary<uint, uint> currentCounts)
+    {
+        var gained = catalog.Entries
+            .Select(item => new
+            {
+                item.ItemId,
+                Quantity = (long)currentCounts.GetValueOrDefault(item.ItemId)
+                    - transactionMateriaBaseline.GetValueOrDefault(item.ItemId)
+                    + transactionInputQuantities.GetValueOrDefault(item.ItemId),
+            })
+            .Where(item => item.Quantity > 0)
+            .ToArray();
+
+        if (gained.Length != 1 || gained[0].Quantity != 1)
+        {
+            UnidentifiedResultCount++;
+            return;
+        }
+
+        var itemId = gained[0].ItemId;
+        receivedMateriaCounts[itemId] = receivedMateriaCounts.GetValueOrDefault(itemId) + 1;
+    }
+
+    private void ClearTransactionTracking()
+    {
+        transactionBaseline.Clear();
+        transactionMateriaBaseline.Clear();
+        transactionInputQuantities.Clear();
+        transactionMateriaTotalBaseline = 0;
     }
 
     public void Dispose() => Stop("Plugin unloaded.");
@@ -607,11 +669,15 @@ public sealed unsafe class TransmutationController
         confirmationDelayAppliedForBatch = false;
         pendingSelection = null;
         selectedMateria.Clear();
-        transactionBaseline.Clear();
+        ClearTransactionTracking();
         textAdvance.Release();
         Status = message;
         if (wasActive)
+        {
+            HasRunSummary = true;
+            LastRunSummary = $"Run ended after {CompletedTransmutations} completed trade(s). {message}";
             log.Information("MutaMaxxing stopped: {Reason}", message);
+        }
     }
 
     private sealed record SelectedMateria(uint ItemId, uint Quantity, InventoryType Container, ushort Slot);

@@ -33,6 +33,8 @@ public sealed class MainWindow : Window, IDisposable
 
         DrawRunControls();
         ImGui.Separator();
+        DrawMateriaResults();
+        ImGui.Separator();
         DrawInventoryPreview();
         ImGui.Separator();
         var rulesLocked = controller.IsRunning;
@@ -47,6 +49,55 @@ public sealed class MainWindow : Window, IDisposable
 
     public void Dispose()
     {
+    }
+
+    private void DrawMateriaResults()
+    {
+        if (!ImGui.CollapsingHeader("Materia received tracker", ImGuiTreeNodeFlags.DefaultOpen))
+            return;
+
+        if (controller.IsRunning)
+            ImGui.TextDisabled($"Live results · {controller.CompletedTransmutations} trades completed this run.");
+        else if (controller.HasRunSummary)
+            ImGui.TextWrapped(controller.LastRunSummary);
+        else
+            ImGui.TextDisabled("Received materia and the final run summary will appear here.");
+
+        var rows = new List<(MateriaDefinition Materia, int Count)>();
+        foreach (var result in controller.ReceivedMateriaCounts)
+        {
+            if (catalog.TryGet(result.Key, out var materia))
+                rows.Add((materia, result.Value));
+        }
+
+        if (rows.Count == 0)
+            ImGui.TextDisabled("No materia results recorded yet.");
+        else
+        {
+            ImGui.TextDisabled($"Materia results recorded: {rows.Sum(row => (long)row.Count)} total");
+            if (ImGui.BeginTable("received_materia_results", 2,
+                    ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.SizingStretchProp,
+                    new Vector2(0, 160)))
+            {
+                ImGui.TableSetupColumn("Materia", ImGuiTableColumnFlags.WidthStretch);
+                ImGui.TableSetupColumn("Times received", ImGuiTableColumnFlags.WidthFixed, 110);
+                ImGui.TableHeadersRow();
+
+                foreach (var row in rows.OrderByDescending(row => row.Count).ThenBy(row => row.Materia.Name, StringComparer.CurrentCulture))
+                {
+                    ImGui.TableNextRow();
+                    ImGui.TableSetColumnIndex(0);
+                    ImGui.Text(row.Materia.Name);
+                    ImGui.TableSetColumnIndex(1);
+                    ImGui.Text(row.Count.ToString());
+                }
+
+                ImGui.EndTable();
+            }
+        }
+
+        if (controller.UnidentifiedResultCount > 0)
+            ImGui.TextWrapped($"Could not identify the result from inventory changes for {controller.UnidentifiedResultCount} completed trade(s).");
     }
 
     private void DrawRunControls()

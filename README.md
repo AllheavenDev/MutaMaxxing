@@ -20,6 +20,7 @@ An experimental Dalamud plugin that previews eligible materia in the player's fo
 - Optional **Require five different materia of one grade** mode selects one materia from each of five distinct item types at the same grade. A type can be used in later trades.
 - MutaMaxxing adds a random 5–10 ms micro-delay between materia selection requests and waits 10 ms before confirming each batch.
 - Optional **Add randomized delay between trades (50–70 ms)** adds a random pause averaging 60 ms after each completed trade, on top of the existing completion wait.
+- The collapsible **Materia received tracker** lists each identified result and how many times it was received during the current or most recent run, then shows a final run summary when the run ends. Results are identified by reconciling materia inventory counts before and after each confirmed trade.
 - `/mutamaxxing` opens the menu for selecting eligible materia and starting a run. The Start button is enabled only when Mutamix is within 5 yalms, the `TradeMultiple` window is open, TextAdvance is enabled and responding, and the game window has no materia already selected. Moving out of range during a run stops the next trade.
 - Each exchange uses five inputs. MutaMaxxing waits for those inputs to leave inventory before choosing another batch. A timeout stops the run without retrying a possibly submitted exchange.
 - Use the **Stop run** button or `/mutamaxxing stop`. A submitted in-game exchange may finish after Stop; no later exchange will be submitted.
@@ -45,7 +46,7 @@ That is the same folder used by TouristMod and AnoMech. The helper removes or re
 1. Load the dev build and confirm `/mutamaxxing` opens the selection menu. Check that its Mutamix distance readout and Start button update while moving toward and away from him.
 2. Stand within 5 yalms, open Mutamix's Materia Transmutation window, enable TextAdvance, and compare the preview against the materia in Inventory 1–4. Confirm Start remains disabled until all prerequisites are met.
 3. Start with at least five low-value materia that match the active rules. Confirm that the game window begins with no selected materia.
-4. Observe one submitted exchange and verify five inputs leave inventory, one result appears, and the next batch is not submitted before the inventory change is observed.
+4. Observe one submitted exchange and verify five inputs leave inventory, one result appears in the tracker, and the next batch is not submitted before the inventory change is observed. Confirm the final results and trade count remain visible after the run ends.
 5. Verify trades never mix materia grades. Enable the five-different-materia option and confirm each batch also contains five distinct types of that grade, including when duplicate types are split across inventory stacks. Confirm Start is disabled unless one grade has five eligible types.
 6. Enable the randomized inter-trade delay and observe that it adds a small pause after a completed trade.
 7. Test Stop while selecting and after submission, then test the stop command, moving out of Mutamix's range, closing the Mutamix window, missing/disabled TextAdvance, and fewer than five eligible items.
