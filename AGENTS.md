@@ -7,9 +7,8 @@ These rules apply throughout the MutaMaxxing repository. When it is inside the l
 - Do not use subagents unless the user explicitly asks for one.
 - Work on a focused branch and submit repository changes through a pull request. Do not commit directly to `main`.
 - Use Conventional Commits and separate unrelated changes.
-- Before committing, verify the repository-local Git identity is `Shikaare <shikaare@gmail.com>`. Never change global Git configuration or add AI co-author trailers.
-- This fixed identity applies to commits made by the repository owner and agents working on their behalf. External contributors must keep their own author and committer identities.
-- GitHub authentication is independent of commit identity; do not change authentication to satisfy the author requirement.
+- Before committing owner-maintained changes, verify that this repository's local Git identity is configured for Shikaare. Keep it repository-local; never change global Git configuration or add AI co-author trailers.
+- External contributors should use their own author and committer identities. GitHub authentication is independent, so contributors do not need to change how they sign in.
 - Never rewrite history, force-push, delete refs, publish a release, or change repository visibility without explicit user authorization.
 - The canonical repository is `https://github.com/AllheavenDev/MutaMaxxing`. Preserve its current visibility unless the user explicitly requests a visibility change.
 
