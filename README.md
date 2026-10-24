@@ -35,7 +35,3 @@ This started as a plugin I made for myself and is 100% vibe coded. Ideas and opt
 ## License
 
 Licensed under the MIT License. See [LICENSE](LICENSE).
-
-## Repository
-
-[AllheavenDev/MutaMaxxing](https://github.com/AllheavenDev/MutaMaxxing)
