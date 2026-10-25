@@ -1,4 +1,5 @@
 using Dalamud.Configuration;
+using MutaMaxxing.Core;
 
 namespace MutaMaxxing;
 
@@ -23,20 +24,11 @@ public sealed class PluginConfig : IPluginConfiguration
     public HashSet<uint> WhitelistMateriaIds { get; set; } = [];
 
     public HashSet<uint> BlacklistMateriaIds { get; set; } = [];
-}
 
-public sealed class MateriaRule
-{
-    public MateriaCategory Category { get; set; }
-
-    // Tier zero means every tier, including tiers added by a future game patch.
-    public int Tier { get; set; }
-}
-
-public enum MateriaCategory
-{
-    Battle,
-    Crafter,
-    Gatherer,
-    Other,
+    internal MateriaEligibilityPolicy CreateEligibilityPolicy() => new(
+        TradeAllExceptBlacklist,
+        WhitelistMateriaIds,
+        WhitelistRules,
+        BlacklistMateriaIds,
+        BlacklistRules);
 }
