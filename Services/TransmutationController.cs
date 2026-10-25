@@ -3,6 +3,7 @@ using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
+using MutaMaxxing.Core;
 using MutaMaxxing.Services;
 
 namespace MutaMaxxing.Services;
@@ -397,7 +398,7 @@ public sealed unsafe class TransmutationController
             return null;
 
         var fallbackBatch = IsFallbackTier(batchTier.Value);
-        IReadOnlyList<(uint ItemId, int Quantity)> fallbackPlan = fallbackBatch
+        IReadOnlyList<MateriaBatchItem> fallbackPlan = fallbackBatch
             ? GetFallbackBatchPlan(batchTier.Value)
             : [];
 
@@ -441,23 +442,12 @@ public sealed unsafe class TransmutationController
         if (!fallbackBatch)
             return candidates.FirstOrDefault();
 
-        // Select every eligible type once before taking planned extra copies,
-        // which are allocated by descending inventory count.
-        var incompleteType = fallbackPlan.FirstOrDefault(item =>
-            selectedQuantities.GetValueOrDefault(item.ItemId) > 0 &&
-            selectedQuantities.GetValueOrDefault(item.ItemId) < item.Quantity);
-        var nextType = incompleteType.ItemId != 0
-            ? incompleteType.ItemId
-            : fallbackPlan.FirstOrDefault(item =>
-                item.Quantity == 1 && selectedQuantities.GetValueOrDefault(item.ItemId) == 0).ItemId;
-        if (nextType == 0)
-        {
-            nextType = fallbackPlan.FirstOrDefault(item =>
-                selectedQuantities.GetValueOrDefault(item.ItemId) < item.Quantity).ItemId;
-        }
+        var nextType = MateriaBatchPlanner.GetNextPlannedItemId(fallbackPlan, selectedQuantities);
+        if (nextType is null)
+            return null;
 
         return candidates
-            .Where(stack => stack.ItemId == nextType)
+            .Where(stack => stack.ItemId == nextType.Value)
             .OrderByDescending(stack => stack.Quantity)
             .FirstOrDefault();
     }
@@ -594,24 +584,18 @@ public sealed unsafe class TransmutationController
 
     private void RecordReceivedMateria(IReadOnlyDictionary<uint, uint> currentCounts)
     {
-        var gained = catalog.Entries
-            .Select(item => new
-            {
-                item.ItemId,
-                Quantity = (long)currentCounts.GetValueOrDefault(item.ItemId)
-                    - transactionMateriaBaseline.GetValueOrDefault(item.ItemId)
-                    + transactionInputQuantities.GetValueOrDefault(item.ItemId),
-            })
-            .Where(item => item.Quantity > 0)
-            .ToArray();
+        var receivedItemId = MateriaTransmutationResult.IdentifyReceivedMateria(
+            catalog.Entries.Select(item => item.ItemId),
+            currentCounts,
+            transactionMateriaBaseline,
+            transactionInputQuantities);
 
-        if (gained.Length != 1 || gained[0].Quantity != 1)
+        if (receivedItemId is not { } itemId)
         {
             UnidentifiedResultCount++;
             return;
         }
 
-        var itemId = gained[0].ItemId;
         receivedMateriaCounts[itemId] = receivedMateriaCounts.GetValueOrDefault(itemId) + 1;
     }
 
@@ -641,49 +625,6 @@ public sealed unsafe class TransmutationController
             .ToArray();
     }
 
-    private bool CanCompleteTrade(IGrouping<int, (MateriaDefinition Materia, uint Count)> tierGroup)
-    {
-        var itemCount = tierGroup.Sum(item => (long)item.Count);
-        if (!config.RequireFiveDifferentMateria)
-            return itemCount >= 5;
-
-        var distinctTypeCount = tierGroup.Select(item => item.Materia.ItemId).Distinct().Take(5).Count();
-        return distinctTypeCount == 5 ||
-               config.FallbackToMostCommonMateria && distinctTypeCount < 5 && itemCount >= 5;
-    }
-
-    private bool IsFallbackTier(int tier) =>
-        config.RequireFiveDifferentMateria &&
-        config.FallbackToMostCommonMateria &&
-        EligibleMateria
-            .Where(item => item.Materia.Tier == tier)
-            .Select(item => item.Materia.ItemId)
-            .Distinct()
-            .Take(5)
-            .Count() < 5;
-
-    private IReadOnlyList<(uint ItemId, int Quantity)> GetFallbackBatchPlan(int tier)
-    {
-        var materia = EligibleMateria
-            .Where(item => item.Materia.Tier == tier)
-            .OrderByDescending(item => item.Count)
-            .ThenBy(item => item.Materia.ItemId)
-            .ToArray();
-        if (materia.Length >= 5)
-            return [];
-
-        var remainingCopies = 5 - materia.Length;
-        var plan = materia.Select(item => (ItemId: item.Materia.ItemId, Quantity: 1)).ToArray();
-        for (var index = 0; index < materia.Length && remainingCopies > 0; index++)
-        {
-            var extraCopies = (int)Math.Min(materia[index].Count - 1, (uint)remainingCopies);
-            plan[index].Quantity += extraCopies;
-            remainingCopies -= extraCopies;
-        }
-
-        return plan;
-    }
-
     private bool HasValidDifferentMateriaSelection()
     {
         if (selectedMateria.Count == 0 || !catalog.TryGet(selectedMateria[0].ItemId, out var selectedDefinition))
@@ -692,21 +633,10 @@ public sealed unsafe class TransmutationController
         var selectedQuantities = selectedMateria
             .GroupBy(item => item.ItemId)
             .ToDictionary(group => group.Key, group => group.Sum(item => (int)item.Quantity));
-        var eligibleTypeIds = EligibleMateria
-            .Where(item => item.Materia.Tier == selectedDefinition.Tier)
-            .Select(item => item.Materia.ItemId)
-            .ToHashSet();
-        var fallbackBatch = IsFallbackTier(selectedDefinition.Tier);
-        if (!selectedQuantities.Keys.All(eligibleTypeIds.Contains))
-            return false;
-
-        if (!fallbackBatch)
-            return selectedQuantities.Count == 5 && selectedQuantities.Values.All(quantity => quantity == 1);
-
-        var fallbackPlan = GetFallbackBatchPlan(selectedDefinition.Tier)
-            .ToDictionary(item => item.ItemId, item => item.Quantity);
-        return selectedQuantities.Count == fallbackPlan.Count &&
-               fallbackPlan.All(pair => selectedQuantities.GetValueOrDefault(pair.Key) == pair.Value);
+        return MateriaBatchPlanner.IsValidDifferentMateriaSelection(
+            GetMateriaInventoryEntries(selectedDefinition.Tier),
+            selectedQuantities,
+            config.FallbackToMostCommonMateria);
     }
 
     private int? GetBatchTier()
@@ -717,21 +647,30 @@ public sealed unsafe class TransmutationController
         if (pendingSelection is { } pending && catalog.TryGet(pending.ItemId, out var pendingDefinition))
             return pendingDefinition.Tier;
 
-        return EligibleMateria
-            .GroupBy(item => item.Materia.Tier)
-            .Where(CanCompleteTrade)
-            .Select(group => new
-            {
-                Tier = group.Key,
-                ItemCount = group.Sum(item => (long)item.Count),
-                DistinctTypeCount = group.Select(item => item.Materia.ItemId).Distinct().Count(),
-            })
-            .OrderByDescending(group => config.RequireFiveDifferentMateria ? group.DistinctTypeCount : group.ItemCount)
-            .ThenByDescending(group => group.ItemCount)
-            .ThenByDescending(group => group.Tier)
-            .Select(group => (int?)group.Tier)
-            .FirstOrDefault();
+        return MateriaBatchPlanner.SelectTier(
+            GetMateriaInventoryEntries(),
+            config.RequireFiveDifferentMateria,
+            config.FallbackToMostCommonMateria);
     }
+
+    private bool CanCompleteTrade(IGrouping<int, (MateriaDefinition Materia, uint Count)> tierGroup) =>
+        MateriaBatchPlanner.CanCompleteTrade(
+            tierGroup.Select(item => new MateriaInventoryEntry(item.Materia, item.Count)),
+            config.RequireFiveDifferentMateria,
+            config.FallbackToMostCommonMateria);
+
+    private bool IsFallbackTier(int tier) => MateriaBatchPlanner.IsFallbackTier(
+        GetMateriaInventoryEntries(tier),
+        config.RequireFiveDifferentMateria,
+        config.FallbackToMostCommonMateria);
+
+    private IReadOnlyList<MateriaBatchItem> GetFallbackBatchPlan(int tier) =>
+        MateriaBatchPlanner.CreateFallbackPlan(GetMateriaInventoryEntries(tier));
+
+    private MateriaInventoryEntry[] GetMateriaInventoryEntries(int? tier = null) => EligibleMateria
+        .Where(item => tier is null || item.Materia.Tier == tier.Value)
+        .Select(item => new MateriaInventoryEntry(item.Materia, item.Count))
+        .ToArray();
 
     private bool SelectedMateriaShareTier()
     {
@@ -773,19 +712,7 @@ public sealed unsafe class TransmutationController
             mutamixDistance = MathF.Sqrt(closestDistanceSquared);
     }
 
-    private bool IsEligible(MateriaDefinition materia)
-    {
-        if (config.BlacklistMateriaIds.Contains(materia.ItemId) || MatchesAny(config.BlacklistRules, materia))
-            return false;
-
-        if (config.TradeAllExceptBlacklist)
-            return true;
-
-        return config.WhitelistMateriaIds.Contains(materia.ItemId) || MatchesAny(config.WhitelistRules, materia);
-    }
-
-    private static bool MatchesAny(IEnumerable<MateriaRule> rules, MateriaDefinition materia) =>
-        rules.Any(rule => rule.Category == materia.Category && (rule.Tier == 0 || rule.Tier == materia.Tier));
+    private bool IsEligible(MateriaDefinition materia) => config.CreateEligibilityPolicy().IsEligible(materia);
 
     private void Stop(string message)
     {

@@ -1,6 +1,7 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
+using MutaMaxxing.Core;
 using MutaMaxxing.Services;
 
 namespace MutaMaxxing.Windows;

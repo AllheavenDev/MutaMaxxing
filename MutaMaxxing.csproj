@@ -11,4 +11,13 @@
     <TargetPlatformMoniker>Windows,Version=7.0</TargetPlatformMoniker>
     <TargetPlatformDisplayName>Windows</TargetPlatformDisplayName>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="MutaMaxxing.Core\MutaMaxxing.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="MutaMaxxing.Core\**\*.cs" />
+    <Compile Remove="MutaMaxxing.Core.Tests\**\*.cs" />
+  </ItemGroup>
 </Project>

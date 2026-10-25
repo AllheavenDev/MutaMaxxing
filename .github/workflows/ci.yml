@@ -1,0 +1,45 @@
+name: MutaMaxxing CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    name: test-and-build
+    runs-on: windows-2022
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download Dalamud dev files
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri 'https://goatcorp.github.io/dalamud-distrib/latest.zip' -OutFile '.\latest.zip'
+          $devDirectory = Join-Path $env:APPDATA 'XIVLauncher\addon\Hooks\dev'
+          New-Item -ItemType Directory -Force -Path $devDirectory | Out-Null
+          Expand-Archive -Force '.\latest.zip' $devDirectory
+
+      - name: Restore test project
+        run: dotnet restore .\MutaMaxxing.Core.Tests\MutaMaxxing.Core.Tests.csproj --locked-mode -p:NuGetAudit=false
+
+      - name: Restore plugin project
+        run: dotnet restore .\MutaMaxxing.csproj --locked-mode -p:NuGetAudit=false
+
+      - name: Run core tests
+        run: dotnet test .\MutaMaxxing.Core.Tests\MutaMaxxing.Core.Tests.csproj --configuration Release --no-restore
+
+      - name: Build plugin
+        run: dotnet build .\MutaMaxxing.csproj --configuration Release --no-restore -p:NuGetAudit=false

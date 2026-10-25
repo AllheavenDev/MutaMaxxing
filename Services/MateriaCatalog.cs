@@ -2,21 +2,9 @@ using Dalamud.Game;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using Lumina.Excel.Sheets;
+using MutaMaxxing.Core;
 
 namespace MutaMaxxing.Services;
-
-public sealed class MateriaDefinition
-{
-    public required uint ItemId { get; init; }
-
-    public required string Name { get; init; }
-
-    public required string BaseParamName { get; init; }
-
-    public required MateriaCategory Category { get; init; }
-
-    public required int Tier { get; init; }
-}
 
 public sealed class MateriaCatalog
 {
