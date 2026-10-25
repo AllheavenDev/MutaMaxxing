@@ -1,6 +1,7 @@
 **/bin/
 **/obj/
 .dotnet-home/
+/build-local.ps1
 *.user
 *.suo
 local-plugin/
